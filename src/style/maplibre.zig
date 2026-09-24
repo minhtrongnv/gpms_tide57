@@ -939,8 +939,9 @@ fn contourLabelLayer(js: *Stringify, s: *const SCtx, sl: []const u8, bkt: Bucket
 // drawn — S-52 defines suppression only for coincident lines and area
 // boundaries. So a sounding layer never culls (icon-allow-overlap) and never
 // claims space from the labels above it (icon-ignore-placement): text is drawn
-// last, on top. The native surfaces hold the same line — nothing but text ever
-// enters the collision pool (render/declutter.zig).
+// last, on top. The one deliberate exception is the host's opt-in dense mode:
+// extra spot SOUNDG are browser-decluttered for readability after SCAMIN is
+// relaxed. Danger depths and the normal/current mode keep the all-symbol rule.
 //
 // The soundings source-layer still splits into two style layers, but on PAINT
 // ORDER, not collision: a DANGER depth (a wreck/obstruction/rock sounding) is
@@ -1660,7 +1661,7 @@ test "json: dense soundings declutter only spot SOUNDG" {
     const ct =
         \\{"day":{"DEPDW":"#c9edff"},"dusk":{},"night":{}}
     ;
-    const manifest = [_]i64{ 60000 };
+    const manifest = [_]u32{ 60000 };
 
     var m = mariner.Settings{
         .display_other = true,
