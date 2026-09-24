@@ -421,10 +421,15 @@ const SCAMIN_COALESCE_MAX = 1000000000000; // 1e12
 // filter-gate (?scaminexact) or the static zoom-gate (the default merged mode). A
 // non-SCAMIN feature coalesces to 1e12 (>= any denominator) and always passes.
 fn writeScaminClause(js: *Stringify, bkt: Bucket) !void {
+    // OpenCPN/S-52 parity: SCAMIN is not applied to Display Base or Group-1
+    // features, even if an ENC carries a spurious SCAMIN on them.
+    try js.beginArray();
+    try js.write("any");
+    try js.write(.{ "==", .{ "coalesce", .{ "get", "display_category" }, 1 }, 0 });
+    try js.write(.{ "==", .{ "coalesce", .{ "get", "display_priority" }, -1 }, 1 });
+
     if (bkt.filter_gate) {
-        // scamin-layers.md: [">=", ["coalesce", ["get","scamin"], 1e12], curDenom].
-        // The live client rewrites curDenom via setFilter at the discrete SCAMIN boundary
-        // crossings; the emitted literal is the standalone default (0 => show all).
+        // Exact/live physical-display denominator.
         try js.beginArray();
         try js.write(">=");
         try js.beginArray();
@@ -434,44 +439,32 @@ fn writeScaminClause(js: *Stringify, bkt: Bucket) !void {
         try js.endArray();
         try js.write(bkt.cur_denom);
         try js.endArray();
-        return;
-    }
-    // zoom_gate (the only other clause-bearing mode; has_clause guarantees it):
-    // tile57/3 bakes the fractional admission zoom into `vz`, so current
-    // archives stay on the cheap get+compare path. Older tile57/2 archives
-    // carry only raw `scamin`; using a literal 0 fallback for missing `vz`
-    // made EVERY SCAMIN'd feature visible at every zoom when a live compositor
-    // was opened over a stale cache. That is exactly the "all symbols at
-    // overview scale" failure mode.
-    //
-    // Coalesce lazily falls back to the old mathematically-equivalent gate only
-    // when `vz` is absent:
-    //
-    //   vz = log2(K / scamin)
-    //   show when vz <= zoom
-    //
-    // Missing SCAMIN coalesces to a huge denominator, yielding a negative
-    // admission zoom and therefore remaining always-visible as before.
-    try js.write(.{
-        "<=",
-        .{
-            "coalesce",
+    } else {
+        // Merged mode: current archives carry reference-pitch admission zoom (vz).
+        // Correct it for this screen with zoom_shift; old archives fall back to raw
+        // SCAMIN + the current physical-display K.
+        try js.write(.{
+            "<=",
             .{
-                "+",
-                .{ "get", "vz" },
-                bkt.zoom_shift,
-            },
-            .{
-                "log2",
+                "coalesce",
                 .{
-                    "/",
-                    bkt.zoom_k,
-                    .{ "coalesce", .{ "get", "scamin" }, SCAMIN_COALESCE_MAX },
+                    "+",
+                    .{ "get", "vz" },
+                    bkt.zoom_shift,
+                },
+                .{
+                    "log2",
+                    .{
+                        "/",
+                        bkt.zoom_k,
+                        .{ "coalesce", .{ "get", "scamin" }, SCAMIN_COALESCE_MAX },
+                    },
                 },
             },
-        },
-        .{"zoom"},
-    });
+            .{"zoom"},
+        });
+    }
+    try js.endArray();
 }
 
 // Write a layer's `filter`. The filter ANDs together (in order): the `base` predicate
