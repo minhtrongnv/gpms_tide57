@@ -739,6 +739,10 @@ typedef struct tile57_mariner {
                          * the portrayed name, so this switches without a
                          * re-bake. Appended for ABI-append-safety; a zeroed
                          * struct keeps the portrayed name. */
+    bool dense_soundings; /* host opt-in: ignore SCAMIN only for spot SOUNDG
+                         * marks, reproducing the older/demo high-density
+                         * sounding view without ungating other chart features.
+                         * Default false. Appended for ABI-append-safety. */
 } tile57_mariner;
 
 /* Fill *m with the canonical default mariner settings (so a host needn't
