@@ -2178,7 +2178,7 @@ export fn tile57_render_symbol_run(
 }
 
 const glyph_sdf = @import("sprite").glyph;
-const glyph_pbf = @import("sprite/glyphpbf.zig");
+const glyph_pbf = @import("sprite").glyphpbf;
 
 // Glyph metrics as compact JSON: {"em_px","pad","glyphs":{cp:[u0,v0,u1,v1,ox,oy,w,h,adv]}}.
 fn glyphMetricsJson(a: std.mem.Allocator, atlas: *const glyph_sdf.Atlas) ![]u8 {
