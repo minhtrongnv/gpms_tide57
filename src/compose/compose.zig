@@ -1599,6 +1599,18 @@ test "maxZoomAt: indexed walk matches the exhaustive one" {
     try std.testing.expectEqual(@as(u8, 7), src.maxZoomAt(2e-2, 2e-2)); // outside every cell -> loop_max
 }
 
+// The numeric value of `key` on a decoded feature, or null if absent.
+fn propNum(props: []const mvt.Prop, key: []const u8) ?f64 {
+    for (props) |p| if (std.mem.eql(u8, p.key, key)) return switch (p.value) {
+        .float => |v| @floatCast(v),
+        .double => |v| v,
+        .int => |v| @floatFromInt(v),
+        .uint => |v| @floatFromInt(v),
+        else => null,
+    };
+    return null;
+}
+
 // The integer value of `key` on a decoded feature, or null if absent.
 fn propInt(props: []const mvt.Prop, key: []const u8) ?i64 {
     for (props) |p| if (std.mem.eql(u8, p.key, key)) return switch (p.value) {
