@@ -73,7 +73,7 @@ type Mariner struct {
 	SoundingSizeScale                                       float64 // extra multiplier for SOUNDINGS on top of SizeScale (0 reads as 1.0)
 	DeviceScale                                             float64 // device px per reference px: the HiDPI density the SURFACE paths are drawn at (0 reads as 1.0)
 	Soundings                                               SoundingsMode
-	DenseSoundings                                          bool    // ignore SCAMIN only for spot SOUNDG; legacy/demo high-density view
+	DenseSoundings                                          bool    // relax spot SOUNDG to its source-band floor; legacy/demo progressive density
 	ViewingGroupsOff                                        []int32 // S-52 §14.5 DENY-LIST: vg ids turned OFF (nil/empty = show all)
 }
 
