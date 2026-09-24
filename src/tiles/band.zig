@@ -1,9 +1,9 @@
-const std = @import("std");
-
 //! Navigational-purpose bands: the map from an S-57 cell's compilation scale to
 //! the Web-Mercator zoom range it serves. Pure integer math, shared by the baker
 //! (which bakes each cell over its band's zooms) and the compositor (which reads
 //! the band to decide overscale fill-up), so neither owns the mapping.
+
+const std = @import("std");
 
 /// Native [minzoom, maxzoom] Web-Mercator span for a navigational-purpose band.
 pub const ZoomRange = struct { min: u8, max: u8 };
@@ -51,7 +51,6 @@ test "OpenCPN admission floor is two-scale-level chart admission, not NOAA band 
     // Chesapeake (~39N): an 1:80k approach chart is eligible by about 1:320k,
     // whose crossing is z~9.5, so z9 must contain it. A 1:20k harbour chart
     // crosses around z11.5 and therefore first needs a z11 source tile.
-    const std = @import("std");
     try std.testing.expectEqual(@as(u8, 9), openCpnAdmissionFloor(80_000, 39.0));
     try std.testing.expectEqual(@as(u8, 11), openCpnAdmissionFloor(20_000, 39.0));
 }
@@ -88,7 +87,6 @@ pub fn bandZooms(band: Band) ZoomRange {
 }
 
 test "bandOf maps compilation scale to band" {
-    const std = @import("std");
     try std.testing.expectEqual(Band.harbor, bandOf(20_000));
     try std.testing.expectEqual(Band.approach, bandOf(50_000));
     try std.testing.expectEqual(Band.overview, bandOf(3_000_000));
@@ -96,7 +94,6 @@ test "bandOf maps compilation scale to band" {
 }
 
 test "bandZooms is finest-to-coarsest with one-zoom overlap" {
-    const std = @import("std");
     try std.testing.expectEqual(ZoomRange{ .min = 11, .max = 13 }, bandZooms(.approach));
     try std.testing.expectEqual(ZoomRange{ .min = 9, .max = 11 }, bandZooms(.coastal));
 }
