@@ -14,6 +14,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const s57 = @import("s57");
 const tile = @import("tiles").tile;
+const tband = @import("tiles").band;
 const mvt = @import("tiles").mvt;
 const mlt = @import("tiles").mlt;
 const render = @import("render");
@@ -2762,7 +2763,7 @@ fn appendCellFeatures(
                 // nominal usage-band zoom. Keep them out only before the
                 // OpenCPN-style chart-admission floor so world-view fill-down
                 // does not turn fine-cell sector figures into giant clutter.
-                const admit = band.openCpnAdmissionFloor(cell.params.cscl, (tb[1] + tb[3]) * 0.5);
+                const admit = tband.openCpnAdmissionFloor(cell.params.cscl, (tb[1] + tb[3]) * 0.5);
                 if (z < admit) continue;
             }
         }
