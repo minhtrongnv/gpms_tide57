@@ -1746,6 +1746,59 @@ test "json: dense mode collision-thins spot soundings only" {
     try std.testing.expectEqual(true, strict_spot.get("icon-ignore-placement").?.bool);
 }
 
+test "json: dense soundings keep a progressive band-floor SCAMIN gate" {
+    const a = std.testing.allocator;
+    const ct =
+        \\{"day":{"DEPDW":"#c9edff"},"dusk":{},"night":{}}
+    ;
+
+    var m = mariner.Settings{
+        .display_other = true,
+        .show_soundings = true,
+        .dense_soundings = true,
+    };
+
+    // Default merged mode: dense SOUNDG uses min(raw vz, source-band floor vz),
+    // not an ungated layer. The source band property is part of the filter.
+    const merged = try json(a, .{
+        .scheme = "day",
+        .colortables_json = ct,
+        .sprite = "sprite",
+        .source_tiles = "tile57://{z}/{x}/{y}",
+        .mariner = m,
+        .scamin_lat = 38.9,
+    });
+    defer a.free(merged);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        merged,
+        "[\"min\",[\"coalesce\",[\"get\",\"vz\"]",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        merged,
+        "[\"match\",[\"coalesce\",[\"get\",\"band\"],5]",
+    ) != null);
+
+    // Exact filter-gate mode uses max(raw SCAMIN, band-floor denominator).
+    m.scamin_filter_gate = true;
+    const exact = try json(a, .{
+        .scheme = "day",
+        .colortables_json = ct,
+        .sprite = "sprite",
+        .source_tiles = "tile57://{z}/{x}/{y}",
+        .mariner = m,
+        .scamin_filter_gate = true,
+        .scamin_cur_denom = 200000,
+        .scamin_lat = 38.9,
+    });
+    defer a.free(exact);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        exact,
+        "[\"max\",[\"coalesce\",[\"get\",\"scamin\"],1000000000000]",
+    ) != null);
+}
 test "json: size_scale wraps icon/line/text sizes in a multiplier" {
     const a = std.testing.allocator;
     const ct =
