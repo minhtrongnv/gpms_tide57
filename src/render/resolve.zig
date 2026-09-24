@@ -166,17 +166,16 @@ pub fn categoryVisible(cat: ?i64, class: []const u8, symbol_name: ?[]const u8, m
     };
 }
 
-/// 1:N scale denominator of the whole world in one 256px tile at z0 — the
-/// constant the style's SCAMIN gate divides by (style/maplibre.zig SCAMIN_GATE).
-pub const DENOM_Z0 = 279541132.0;
+/// Reference-screen 1:N denominator at z0 for the same 0.2645 mm CSS pitch used
+/// by the MapLibre style. A calibrated display multiplies this by size_scale
+/// (reference_pitch / actual_pitch), exactly like the merged browser gate.
+pub const DENOM_Z0 = 295922559.41028535;
 
-/// SCAMIN gate at a (fractional) display zoom — mirrors the style expression
-/// `zoom >= log2(DENOM_Z0 / scamin)` (style/maplibre.zig SCAMIN_GATE). A feature
-/// without SCAMIN (null) always shows.
-pub fn scaminVisible(scamin: ?i64, zoom: f64) bool {
+pub fn scaminVisible(scamin: ?i64, zoom: f64, size_scale: f64) bool {
     const s = scamin orelse return true;
     if (s <= 0) return true;
-    return zoom >= std.math.log2(DENOM_Z0 / @as(f64, @floatFromInt(s)));
+    const k = DENOM_Z0 * (if (size_scale > 0) size_scale else 1.0);
+    return zoom >= std.math.log2(k / @as(f64, @floatFromInt(s)));
 }
 
 /// Overscale gate (S-52 §10.1.10.2) — the AP(OVERSC01) hatch over a cell's M_COVR
@@ -219,7 +218,7 @@ pub fn textGroupVisible(group: i64, m: *const Settings) bool {
 pub fn visible(meta: *const rs.FeatureMeta, symbol_name: ?[]const u8, zoom: f64, m: *const Settings) bool {
     if (!categoryVisible(meta.display_category, meta.class, symbol_name, m)) return false;
     if (!viewingGroupVisible(meta.vg, m.viewing_groups_off)) return false;
-    if (!m.ignore_scamin and !scaminVisible(meta.scamin, zoom)) return false;
+    if (!m.ignore_scamin and !scaminVisible(meta.scamin, zoom, m.size_scale)) return false;
     // The AP(OVERSC01) overscale hatch (S-52 §10.1.10): the mariner toggle, plus
     // the oscl scale gate. Hidden under ignore_scamin (the debug toggle drops all
     // scale gating — an always-on hatch would bury the debug view), mirroring the
@@ -347,10 +346,20 @@ test "categoryVisible mirrors mariner.categoryFilter" {
 
 test "scaminVisible mirrors the style SCAMIN_GATE" {
     // 1:30000 gates at log2(279541132/30000) ~= 13.186.
-    try std.testing.expect(!scaminVisible(30000, 13.0));
-    try std.testing.expect(scaminVisible(30000, 13.2));
-    try std.testing.expect(scaminVisible(null, 0)); // no SCAMIN -> always
-    try std.testing.expect(scaminVisible(0, 0)); // degenerate 0 -> always
+    try std.testing.expect(!scaminVisible(30000, 13.0, 1.0));
+    try std.testing.expect(scaminVisible(30000, 13.2, 1.0));
+    try std.testing.expect(scaminVisible(null, 0, 1.0)); // no SCAMIN -> always
+    try std.testing.expect(scaminVisible(0, 0, 1.0)); // degenerate 0 -> always
+}
+
+test "scaminVisible follows physical display size_scale" {
+    // Halving the physical pixel pitch doubles pixels/mm, which shifts the same
+    // SCAMIN crossing one Web-Mercator zoom level finer.
+    const s: ?i64 = 60000;
+    const z_ref = std.math.log2(DENOM_Z0 / 60000.0);
+    try std.testing.expect(scaminVisible(s, z_ref + 0.01, 1.0));
+    try std.testing.expect(!scaminVisible(s, z_ref + 0.01, 2.0));
+    try std.testing.expect(scaminVisible(s, z_ref + 1.01, 2.0));
 }
 
 test "osclVisible: the X2 hatch never fires at/below 1x, fires past 2x" {
