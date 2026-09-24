@@ -35,7 +35,7 @@ export interface MarinerSettings {
   display_other: boolean;
   /** Spot soundings override: null follows OTHER, true/false pins them independently. */
   show_soundings: boolean | null;
-  /** Ignore SCAMIN only for spot SOUNDG, reproducing the older/demo dense sounding view. */
+  /** Relax spot SOUNDG SCAMIN to its source-band floor, reproducing the older/demo progressive density. */
   dense_soundings: boolean;
   /** M_QUAL data-quality overlay. */
   data_quality: boolean;
