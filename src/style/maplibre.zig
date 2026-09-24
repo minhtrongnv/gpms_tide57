@@ -520,11 +520,10 @@ fn pointLayout(js: *Stringify, alignment: []const u8, icon: std.json.Value, scal
     try writeScaled(js, ICON_SIZE, scale);
     try js.objectField("icon-rotate");
     try js.write(.{ "coalesce", .{ "get", "rotation_deg" }, 0 });
-    const declutter_spot = spot and s.dense_soundings;
     try js.objectField("icon-allow-overlap");
-    try js.write(!declutter_spot);
+    try js.write(true);
     try js.objectField("icon-ignore-placement");
-    try js.write(!declutter_spot);
+    try js.write(true);
     // Draw point symbols in S-101 DrawingPriority order (SYMBOL_SORT: effective
     // display_priority, higher = on top), not raw tile/source order — so e.g. a light
     // (DrawingPriority 24) draws over an obstruction (12). Sorts ascending (lower drawn
@@ -957,10 +956,15 @@ fn soundingsLayer(js: *Stringify, s: *const SCtx, bkt: Bucket, id: []const u8, f
     try js.write(s.sound_img);
     try js.objectField("icon-size");
     try writeScaled(js, ICON_SIZE, s.size_scale);
+
+    // Dense mode relaxes SCAMIN only for spot SOUNDG. Let MapLibre thin those
+    // extra spot-depth sprites in screen space so zoomed-in views remain readable.
+    // Normal soundings and all danger depths keep the existing always-draw behavior.
+    const declutter_spot = spot and s.dense_soundings;
     try js.objectField("icon-allow-overlap");
-    try js.write(true);
+    try js.write(!declutter_spot);
     try js.objectField("icon-ignore-placement");
-    try js.write(true);
+    try js.write(!declutter_spot);
     try js.endObject();
     try js.endObject();
 }
