@@ -365,11 +365,20 @@ fn layerHead(js: *Stringify, id: []const u8, kind: []const u8, source_layer: []c
 // the exact ?scaminexact mode), OR the static K/2^zoom zoom-gate (zoom_gate, the default
 // self-gating "merged" mode), OR nothing (the plain `.{}` bucket, ?ignoreScamin). A
 // non-SCAMIN feature coalesces past every gate (coalesce(scamin,1e12) >= D).
+const ScaminMode = enum {
+    normal,
+    // Reproduce the pre-density-fix sounding behavior only for the host Dense
+    // soundings option: producer SCAMIN is floored to the source cell native
+    // band-floor denominator instead of being removed altogether.
+    dense_sounding_band_floor,
+};
+
 const Bucket = struct {
     zoom_gate: bool = false, // default merged mode: AND the static K/2^zoom SCAMIN gate
     zoom_k: f64 = 0, // zoom_gate: the per-archive display-denominator constant K (scaminGateK)
     filter_gate: bool = false, // scamin-layers.md: the live client-driven SCAMIN clause (?scaminexact)
     cur_denom: f64 = 0, // filter_gate: the current-display-scale denominator literal (client-overwritten)
+    scamin_mode: ScaminMode = .normal,
     suffix: []const u8 = "", // id suffix: "#oscl" (overscaled fill pass) / "" (plain)
     // Overscale (oscl) clause role (S-52 §10.1.10) — see OverscaleRole.
     oscl: OverscaleRole = .none,
@@ -394,6 +403,20 @@ fn bucketWithOverscale(a: std.mem.Allocator, bkt: Bucket, role: OverscaleRole) !
     return b;
 }
 
+// Dense soundings should look like the older hosted demo, not like ignoreScamin.
+// The old bake floored producer SOUNDG SCAMIN to the cell navigational-band floor.
+// Every sounding already carries its source band property, so the style can
+// reconstruct that behavior without a re-bake.
+fn denseSoundingBucket(bkt: Bucket) Bucket {
+    var b = bkt;
+    b.scamin_mode = .dense_sounding_band_floor;
+    return b;
+}
+
+fn oldBandFloorDenom(z: u8) f64 {
+    return @ceil(displayDenomZ(z, 0));
+}
+
 // coalesce fallback for a feature with no `scamin`: a denominator larger than any real
 // display scale, so `scamin >= curDenom` is always true (missing SCAMIN => always shown).
 const SCAMIN_COALESCE_MAX = 1000000000000; // 1e12
@@ -402,49 +425,77 @@ const SCAMIN_COALESCE_MAX = 1000000000000; // 1e12
 // filter-gate (?scaminexact) or the static zoom-gate (the default merged mode). A
 // non-SCAMIN feature coalesces to 1e12 (>= any denominator) and always passes.
 fn writeScaminClause(js: *Stringify, bkt: Bucket) !void {
+    const dense = bkt.scamin_mode == .dense_sounding_band_floor;
+
     if (bkt.filter_gate) {
-        // scamin-layers.md: [">=", ["coalesce", ["get","scamin"], 1e12], curDenom].
-        // The live client rewrites curDenom via setFilter at the discrete SCAMIN boundary
-        // crossings; the emitted literal is the standalone default (0 => show all).
         try js.beginArray();
         try js.write(">=");
-        try js.beginArray();
-        try js.write("coalesce");
-        try js.write(.{ "get", "scamin" });
-        try js.write(SCAMIN_COALESCE_MAX);
-        try js.endArray();
+        if (!dense) {
+            try js.beginArray();
+            try js.write("coalesce");
+            try js.write(.{ "get", "scamin" });
+            try js.write(SCAMIN_COALESCE_MAX);
+            try js.endArray();
+        } else {
+            // Legacy/demo SOUNDG gate: max(raw SCAMIN, band-floor SCAMIN).
+            try js.beginArray();
+            try js.write("max");
+            try js.write(.{ "coalesce", .{ "get", "scamin" }, SCAMIN_COALESCE_MAX });
+            try js.write(.{
+                "match",
+                .{ "coalesce", .{ "get", "band" }, 5 },
+                0, oldBandFloorDenom(16),
+                1, oldBandFloorDenom(13),
+                2, oldBandFloorDenom(11),
+                3, oldBandFloorDenom(9),
+                4, oldBandFloorDenom(7),
+                0,
+            });
+            try js.endArray();
+        }
         try js.write(bkt.cur_denom);
         try js.endArray();
         return;
     }
-    // zoom_gate (the only other clause-bearing mode; has_clause guarantees it):
-    // tile57/3 bakes the fractional admission zoom into `vz`, so current
-    // archives stay on the cheap get+compare path. Older tile57/2 archives
-    // carry only raw `scamin`; using a literal 0 fallback for missing `vz`
-    // made EVERY SCAMIN'd feature visible at every zoom when a live compositor
-    // was opened over a stale cache. That is exactly the "all symbols at
-    // overview scale" failure mode.
-    //
-    // Coalesce lazily falls back to the old mathematically-equivalent gate only
-    // when `vz` is absent:
-    //
-    //   vz = log2(K / scamin)
-    //   show when vz <= zoom
-    //
-    // Missing SCAMIN coalesces to a huge denominator, yielding a negative
-    // admission zoom and therefore remaining always-visible as before.
+
+    // Merged zoom gate. Current archives bake raw SCAMIN admission zoom as vz.
+    // Dense SOUNDG reconstructs the old band-floor clamp as
+    // effective_vz = min(raw_vz, band_floor_vz), so coastal soundings appear
+    // first, then approach, harbor and berthing gradually as the user zooms in.
+    const raw_vz = .{
+        "coalesce",
+        .{ "get", "vz" },
+        .{
+            "log2",
+            .{
+                "/",
+                bkt.zoom_k,
+                .{ "coalesce", .{ "get", "scamin" }, SCAMIN_COALESCE_MAX },
+            },
+        },
+    };
+    if (!dense) {
+        try js.write(.{ "<=", raw_vz, .{"zoom"} });
+        return;
+    }
+
+    // Historical floor denominators were based on equator K. Convert them to
+    // this archive admission zoom with one latitude offset. Overview had no floor.
+    const floor_offset = @log2(bkt.zoom_k / scaminGateK(0));
     try js.write(.{
         "<=",
         .{
-            "coalesce",
-            .{ "get", "vz" },
+            "min",
+            raw_vz,
             .{
-                "log2",
-                .{
-                    "/",
-                    bkt.zoom_k,
-                    .{ "coalesce", .{ "get", "scamin" }, SCAMIN_COALESCE_MAX },
-                },
+                "match",
+                .{ "coalesce", .{ "get", "band" }, 5 },
+                0, 16.0 + floor_offset,
+                1, 13.0 + floor_offset,
+                2, 11.0 + floor_offset,
+                3, 9.0 + floor_offset,
+                4, 7.0 + floor_offset,
+                99.0,
             },
         },
         .{"zoom"},
@@ -1166,10 +1217,9 @@ pub fn json(alloc: std.mem.Allocator, opts: Options) ![]u8 {
         for (scamin_buckets) |bkt| try pointSymbolLayers(js, &s, "point_symbols", bkt, .base);
         for (scamin_buckets) |bkt| {
             var sbuf: [96]u8 = undefined;
-            // The hosted demo was baked before spot-sounding SCAMIN density was
-            // tightened, so an opt-in dense mode reproduces that useful "more
-            // depth numbers" view without disabling SCAMIN for buoys/lights/text.
-            const sbkt: Bucket = if (m.dense_soundings) .{} else bkt;
+            // Recreate the hosted demo old SOUNDG band-floor SCAMIN behavior.
+            // This is progressive with zoom; it does not turn SCAMIN off.
+            const sbkt: Bucket = if (m.dense_soundings) denseSoundingBucket(bkt) else bkt;
             try soundingsLayer(js, &s, sbkt, try std.fmt.bufPrint(&sbuf, "soundings{s}", .{sbkt.suffix}), FILT_SPOT_SND, true);
         }
         // Over-soundings pass: high-priority symbols + the danger deviation (see PointMode).
