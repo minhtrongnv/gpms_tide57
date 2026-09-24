@@ -134,6 +134,18 @@ const FILT_DOTTED = .{ "==", .{ "get", "dash" }, "dotted" };
 // engine SYMBOL_SCALE is the unit: a feature at that scale samples 1:1.
 const MLN_BAKE_SCALE: f64 = 0.02834627777338028;
 const ICON_SIZE = .{ "/", .{ "coalesce", .{ "get", "scale" }, 0.08 }, MLN_BAKE_SCALE };
+const DENSE_SOUNDING_PADDING = .{
+    "interpolate",
+    .{ "linear" },
+    .{ "zoom" },
+    9, 2,
+    10, 4,
+    11, 10,
+    12, 18,
+    13, 24,
+    14, 30,
+};
+
 
 const VROW = .{ "match", .{ "coalesce", .{ "get", "valign" }, "middle" }, "top", "top", "bottom", "bottom", "center" };
 const TEXT_ANCHOR = .{
@@ -965,6 +977,19 @@ fn soundingsLayer(js: *Stringify, s: *const SCtx, bkt: Bucket, id: []const u8, f
     try js.write(!declutter_spot);
     try js.objectField("icon-ignore-placement");
     try js.write(!declutter_spot);
+    if (declutter_spot) {
+        // Default MapLibre icon-padding is only 2 px, which is too small for the
+        // extra SOUNDG made eligible by dense mode. Increase screen-space spacing
+        // smoothly with zoom so ~1:200k stays detailed while ~1:100k does not
+        // collapse into a carpet of numbers.
+        try js.objectField("icon-padding");
+        try js.write(DENSE_SOUNDING_PADDING);
+
+        // When two spot depths compete for the same collision area, prefer the
+        // shallower one. Lower symbol-sort-key values place first in MapLibre.
+        try js.objectField("symbol-sort-key");
+        try js.write(.{ "coalesce", .{ "get", "depth" }, 1.0e9 });
+    }
     try js.endObject();
     try js.endObject();
 }
@@ -1693,6 +1718,42 @@ test "json: dense soundings emit a single ungated spot layer" {
         try std.testing.expect(!std.mem.startsWith(u8, id, "soundings#sm"));
     }
     try std.testing.expectEqual(@as(usize, 1), spot_count);
+}
+
+test "json: dense soundings use zoom-adaptive padding and shallow-first priority" {
+    const a = std.testing.allocator;
+    const ct =
+        \\{"day":{"DEPDW":"#c9edff"},"dusk":{},"night":{}}
+    ;
+    const m = mariner.Settings{
+        .display_other = true,
+        .show_soundings = true,
+        .dense_soundings = true,
+    };
+
+    const out = try json(a, .{
+        .scheme = "day",
+        .colortables_json = ct,
+        .sprite = "sprite",
+        .glyphs = "glyphs/{fontstack}/{range}.pbf",
+        .source_tiles = "tile57://{z}/{x}/{y}",
+        .mariner = m,
+    });
+    defer a.free(out);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, a, out, .{});
+    defer parsed.deinit();
+    const layers = parsed.value.object.get("layers").?.array.items;
+    const layout = layerById(layers, "soundings").?.object.get("layout").?.object;
+
+    const padding = layout.get("icon-padding") orelse return error.TestExpectedEqual;
+    try std.testing.expect(padding == .array);
+    const sort_key = layout.get("symbol-sort-key") orelse return error.TestExpectedEqual;
+    try std.testing.expect(sort_key == .array);
+
+    const danger_layout = layerById(layers, "danger_soundings").?.object.get("layout").?.object;
+    try std.testing.expect(danger_layout.get("icon-padding") == null);
+    try std.testing.expect(danger_layout.get("symbol-sort-key") == null);
 }
 
 test "json: dense mode collision-thins spot soundings only" {
