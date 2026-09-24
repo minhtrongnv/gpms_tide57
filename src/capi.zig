@@ -226,7 +226,7 @@ export fn tile57_version() callconv(.c) [*:0]const u8 {
 export fn tile57_enc_charts(path: ?[*:0]const u8, out: ?*?[*]u8, out_len: ?*usize, err: ?*CError) callconv(.c) c_int {
     const o, const n = bytesOut(out, out_len) catch return failWith(err, .badarg, bad_out);
     const p = spanOpt(path) orelse return failWith(err, .badarg, "path must not be null");
-    const c = Chart.openPath(p, null, false) catch |e| return failCtx(err, e, p);
+    const c = Chart.openPathWithIo(sharedIo(), p, null, false) catch |e| return failCtx(err, e, p);
     defer c.deinit();
     const bytes = (c.chartsJson() catch |e| return fail(err, e)) orelse return OK;
     return exportOut(err, o, n, bytes);
@@ -240,7 +240,7 @@ export fn tile57_enc_features(path: ?[*:0]const u8, classes: ?[*:0]const u8, out
     const o, const n = bytesOut(out, out_len) catch return failWith(err, .badarg, bad_out);
     const p = spanOpt(path) orelse return failWith(err, .badarg, "path must not be null");
     const cls = spanOpt(classes) orelse return failWith(err, .badarg, "classes must not be null");
-    const c = Chart.openPath(p, null, false) catch |e| return failCtx(err, e, p);
+    const c = Chart.openPathWithIo(sharedIo(), p, null, false) catch |e| return failCtx(err, e, p);
     defer c.deinit();
     const bytes = (c.featuresJson(cls) catch |e| return fail(err, e)) orelse return OK;
     return exportOut(err, o, n, bytes);

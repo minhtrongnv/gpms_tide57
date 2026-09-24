@@ -337,16 +337,20 @@ const LazySource = struct {
     reader: ?ChartReadFn = null, // streaming: read a cell's bytes on demand
     reader_user: ?*anyopaque = null,
     // Path-backed streaming (chart-api.md): when the chart was opened from an on-disk
-    // ENC_ROOT, this owns the retained Io + Dir + per-cell paths and is the
-    // reader_user; freed in deinit. null for byte/reader-supplied streaming.
+    // ENC_ROOT, this retains the Io + Dir + per-cell paths and is the reader_user.
+    // PathCtx always owns the Dir/paths and optionally owns the Threaded backing Io.
+    // null for byte/reader-supplied streaming.
     path_ctx: ?*PathCtx = null,
 };
 
-// Owned state for a path-backed streaming chart: the retained filesystem handles +
-// per-cell base .000 paths (index-aligned with the LazySource cells). Lives for the
-// chart's lifetime so cells can be read on demand; freed by deinit via PathCtx.deinit.
+// Retained state for a path-backed streaming chart: the filesystem handle + per-cell
+// base .000 paths (index-aligned with the LazySource cells). The Dir/paths/CRCs are
+// always owned here; `threaded` is non-null only when this PathCtx owns the Io backend.
+// Lives for the chart's lifetime and is freed by deinit via PathCtx.deinit.
 const PathCtx = struct {
-    threaded: *std.Io.Threaded,
+    // Non-null when this chart owns the Threaded instance.
+    // Null means `io` is borrowed and must outlive the chart.
+    threaded: ?*std.Io.Threaded = null,
     io: std.Io,
     dir: std.Io.Dir,
     paths: [][]u8, // base .000 path per cell, relative to `dir`
@@ -366,8 +370,10 @@ const PathCtx = struct {
         while (it.next()) |k| gpa.free(k.*);
         self.crcs.deinit(gpa);
         self.dir.close(self.io);
-        self.threaded.deinit();
-        gpa.destroy(self.threaded);
+        if (self.threaded) |threaded| {
+            threaded.deinit();
+            gpa.destroy(threaded);
+        }
         gpa.destroy(self);
     }
 };
@@ -2711,8 +2717,19 @@ pub const Chart = struct {
         errdefer gpa.destroy(threaded);
         threaded.* = .init(gpa, .{});
         errdefer threaded.deinit();
-        const io = threaded.io();
 
+        const src = try openPathWithIo(threaded.io(), path, rules_dir, pick_attrs);
+        // Transfer ownership of this Threaded instance to the path-backed chart.
+        // openPathWithIo itself borrows Io and therefore leaves this null.
+        src.backend.cells.path_ctx.?.threaded = threaded;
+        return src;
+    }
+
+    /// Open an on-disk ENC_ROOT directory (or a single `.000` file) using a
+    /// caller-owned Io. The caller must keep `io` alive until Chart.deinit().
+    /// The returned Chart owns its retained Dir/paths/CRC state, but does NOT
+    /// deinit or destroy the borrowed Io.
+    pub fn openPathWithIo(io: std.Io, path: []const u8, rules_dir: ?[]const u8, pick_attrs: bool) !*Chart {
         const single_file = !isDirIo(io, path);
         const dir_path = if (single_file) (std.fs.path.dirname(path) orelse ".") else path;
         var dir = try std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true });
@@ -2774,7 +2791,7 @@ pub const Chart = struct {
         src.skipped_cells = skipped;
         const ctx = try gpa.create(PathCtx);
         errdefer gpa.destroy(ctx);
-        ctx.* = .{ .threaded = threaded, .io = io, .dir = dir, .paths = try paths.toOwnedSlice(gpa), .crcs = crcs };
+        ctx.* = .{ .threaded = null, .io = io, .dir = dir, .paths = try paths.toOwnedSlice(gpa), .crcs = crcs };
         src.backend.cells.reader_user = ctx;
         src.backend.cells.path_ctx = ctx;
         return src;
