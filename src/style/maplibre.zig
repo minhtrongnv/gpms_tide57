@@ -276,6 +276,10 @@ const SCtx = struct {
     // Visibility, not a filter: a toggle is then a one-op visibility diff
     // instead of a whole-tile re-layout.
     soundings_on: bool,
+    // Dense mode exposes more spot soundings than producer SCAMIN alone would,
+    // so the browser also uses screen-space collision to keep SOUNDG readable.
+    // Danger depths remain unconditional symbols.
+    dense_soundings: bool,
 };
 
 // Display-denominator gate value for the overscale clauses.
@@ -516,10 +520,17 @@ fn pointLayout(js: *Stringify, alignment: []const u8, icon: std.json.Value, scal
     try writeScaled(js, ICON_SIZE, scale);
     try js.objectField("icon-rotate");
     try js.write(.{ "coalesce", .{ "get", "rotation_deg" }, 0 });
+    // Strict/current mode follows S-52: every sounding symbol draws and SCAMIN
+    // controls density. Dense mode deliberately makes more SOUNDG eligible, so
+    // drawing every one becomes an unreadable carpet as the chart zooms in.
+    // In that opt-in mode only spot SOUNDG participate in MapLibre's collision
+    // grid. Higher text layers retain placement priority; ordinary point symbols
+    // ignore collisions; danger depths stay always-on.
+    const declutter_spot = spot and s.dense_soundings;
     try js.objectField("icon-allow-overlap");
-    try js.write(true);
+    try js.write(!declutter_spot);
     try js.objectField("icon-ignore-placement");
-    try js.write(true);
+    try js.write(!declutter_spot);
     // Draw point symbols in S-101 DrawingPriority order (SYMBOL_SORT: effective
     // display_priority, higher = on top), not raw tile/source order — so e.g. a light
     // (DrawingPriority 24) draws over an obstruction (12). Sorts ascending (lower drawn
@@ -940,7 +951,7 @@ fn contourLabelLayer(js: *Stringify, s: *const SCtx, sl: []const u8, bkt: Bucket
 const FILT_SPOT_SND = .{ "==", .{ "coalesce", .{ "get", "class" }, "SOUNDG" }, "SOUNDG" };
 const FILT_DANGER_SND = .{ "!=", .{ "coalesce", .{ "get", "class" }, "SOUNDG" }, "SOUNDG" };
 
-fn soundingsLayer(js: *Stringify, s: *const SCtx, bkt: Bucket, id: []const u8, filt: anytype) !void {
+fn soundingsLayer(js: *Stringify, s: *const SCtx, bkt: Bucket, id: []const u8, filt: anytype, comptime spot: bool) !void {
     try js.beginObject();
     try layerHead(js, id, "symbol", "soundings");
     try applyBucket(js, filt, true, bkt, s, null); // soundings (band-quilted)
@@ -1050,6 +1061,7 @@ pub fn json(alloc: std.mem.Allocator, opts: Options) ![]u8 {
         .show_overscale = m.show_overscale,
         // A TEMPLATE (null mariner) keeps soundings visible; the client gates.
         .soundings_on = if (filters_on) (m.show_soundings orelse m.display_other) else true,
+        .dense_soundings = if (filters_on) m.dense_soundings else false,
     };
 
     var aw: std.Io.Writer.Allocating = .init(alloc);
@@ -1160,7 +1172,7 @@ pub fn json(alloc: std.mem.Allocator, opts: Options) ![]u8 {
             // tightened, so an opt-in dense mode reproduces that useful "more
             // depth numbers" view without disabling SCAMIN for buoys/lights/text.
             const sbkt: Bucket = if (m.dense_soundings) .{} else bkt;
-            try soundingsLayer(js, &s, sbkt, try std.fmt.bufPrint(&sbuf, "soundings{s}", .{sbkt.suffix}), FILT_SPOT_SND);
+            try soundingsLayer(js, &s, sbkt, try std.fmt.bufPrint(&sbuf, "soundings{s}", .{sbkt.suffix}), FILT_SPOT_SND, true);
         }
         // Over-soundings pass: high-priority symbols + the danger deviation (see PointMode).
         for (scamin_buckets) |bkt| try pointSymbolLayers(js, &s, "point_symbols", bkt, .dangers_only);
@@ -1168,7 +1180,7 @@ pub fn json(alloc: std.mem.Allocator, opts: Options) ![]u8 {
         // below the opaque DANGER01/02 ovals the depths would be invisible.
         for (scamin_buckets) |bkt| {
             var dbuf: [96]u8 = undefined;
-            try soundingsLayer(js, &s, bkt, try std.fmt.bufPrint(&dbuf, "danger_soundings{s}", .{bkt.suffix}), FILT_DANGER_SND);
+            try soundingsLayer(js, &s, bkt, try std.fmt.bufPrint(&dbuf, "danger_soundings{s}", .{bkt.suffix}), FILT_DANGER_SND, false);
         }
         // LIGHTS on top: emitted after every other point symbol so a light always draws
         // over a same-priority bridge that lives in a different scamin bucket layer.
