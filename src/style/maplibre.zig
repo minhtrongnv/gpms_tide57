@@ -1164,13 +1164,25 @@ pub fn json(alloc: std.mem.Allocator, opts: Options) ![]u8 {
     //   set per SCAMIN bucket rides each pass.
     if (sprite_on) {
         for (scamin_buckets) |bkt| try pointSymbolLayers(js, &s, "point_symbols", bkt, .base);
-        for (scamin_buckets) |bkt| {
-            var sbuf: [96]u8 = undefined;
-            // The hosted demo was baked before spot-sounding SCAMIN density was
-            // tightened, so an opt-in dense mode reproduces that useful "more
-            // depth numbers" view without disabling SCAMIN for buoys/lights/text.
-            const sbkt: Bucket = if (m.dense_soundings) .{} else bkt;
-            try soundingsLayer(js, &s, sbkt, try std.fmt.bufPrint(&sbuf, "soundings{s}", .{sbkt.suffix}), FILT_SPOT_SND, true);
+        if (m.dense_soundings) {
+            // Dense mode intentionally removes the SCAMIN bucket gate for spot
+            // soundings. Emit ONE ungated layer. Emitting one ungated copy per
+            // SCAMIN bucket duplicates the same SOUNDG candidate pool many times,
+            // defeating collision thinning and creating the "wall of numbers"
+            // seen around ~1:95k.
+            try soundingsLayer(js, &s, .{}, "soundings", FILT_SPOT_SND, true);
+        } else {
+            for (scamin_buckets) |bkt| {
+                var sbuf: [96]u8 = undefined;
+                try soundingsLayer(
+                    js,
+                    &s,
+                    bkt,
+                    try std.fmt.bufPrint(&sbuf, "soundings{s}", .{bkt.suffix}),
+                    FILT_SPOT_SND,
+                    true,
+                );
+            }
         }
         // Over-soundings pass: high-priority symbols + the danger deviation (see PointMode).
         for (scamin_buckets) |bkt| try pointSymbolLayers(js, &s, "point_symbols", bkt, .dangers_only);
