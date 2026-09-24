@@ -70,6 +70,21 @@ pub fn scaminGateK(lat: f64) f64 {
     return M_PER_PX_Z0 * @cos(lat * std.math.pi / 180.0) / (DEFAULT_PX_PITCH_MM / 1000.0);
 }
 
+
+fn physicalScaleMultiplier(size_scale: f64) f64 {
+    // size_scale is the host's CSS-reference-pitch / actual-pitch ratio.
+    // Zero/unset from an older host means the reference display.
+    return if (size_scale > 0) size_scale else 1.0;
+}
+
+fn scaminGateKForSize(lat: f64, size_scale: f64) f64 {
+    return scaminGateK(lat) * physicalScaleMultiplier(size_scale);
+}
+
+fn scaminZoomShift(size_scale: f64) f64 {
+    return std.math.log2(physicalScaleMultiplier(size_scale));
+}
+
 test "scaminGateK: K/2^zoom equals displayDenom (one gate constant)" {
     // The static gate's D(zoom) = K/2^zoom must match the physical displayDenom used
     // by the bucket path — so scamin/oscl share one latitude-correct form.
@@ -363,7 +378,8 @@ fn layerHead(js: *Stringify, id: []const u8, kind: []const u8, source_layer: []c
 // non-SCAMIN feature coalesces past every gate (coalesce(scamin,1e12) >= D).
 const Bucket = struct {
     zoom_gate: bool = false, // default merged mode: AND the static K/2^zoom SCAMIN gate
-    zoom_k: f64 = 0, // zoom_gate: the per-archive display-denominator constant K (scaminGateK)
+    zoom_k: f64 = 0, // zoom_gate: current physical-display denominator constant K
+    zoom_shift: f64 = 0, // add to baked reference-pitch vz for this screen's px pitch
     filter_gate: bool = false, // scamin-layers.md: the live client-driven SCAMIN clause (?scaminexact)
     cur_denom: f64 = 0, // filter_gate: the current-display-scale denominator literal (client-overwritten)
     suffix: []const u8 = "", // id suffix: "#oscl" (overscaled fill pass) / "" (plain)
@@ -433,7 +449,11 @@ fn writeScaminClause(js: *Stringify, bkt: Bucket) !void {
         "<=",
         .{
             "coalesce",
-            .{ "get", "vz" },
+            .{
+                "+",
+                .{ "get", "vz" },
+                bkt.zoom_shift,
+            },
             .{
                 "log2",
                 .{
@@ -927,9 +947,8 @@ fn contourLabelLayer(js: *Stringify, s: *const SCtx, sl: []const u8, bkt: Bucket
 // glyphs so it stays legible and correctly located, and every symbol must be
 // drawn — S-52 defines suppression only for coincident lines and area
 // boundaries. Normal/current mode therefore never culls soundings. The one
-// deliberate browser exception is the host's opt-in dense mode: extra spot
-// SOUNDG are screen-space decluttered after SCAMIN is relaxed so the chart stays
-// readable; danger depths remain unconditional symbols.
+// Sounding density is controlled by producer SCAMIN. The host's soundings switch
+// controls visibility only; it never relaxes the feature's scale gate.
 //
 // The soundings source-layer still splits into two style layers, but on PAINT
 // ORDER, not collision: a DANGER depth (a wreck/obstruction/rock sounding) is
@@ -1007,7 +1026,11 @@ pub fn json(alloc: std.mem.Allocator, opts: Options) ![]u8 {
     else if (opts.scamin_filter_gate)
         .{ .filter_gate = true, .cur_denom = opts.scamin_cur_denom }
     else
-        .{ .zoom_gate = true, .zoom_k = scaminGateK(opts.scamin_lat) };
+        .{
+            .zoom_gate = true,
+            .zoom_k = scaminGateKForSize(opts.scamin_lat, opts.size_scale),
+            .zoom_shift = scaminZoomShift(opts.size_scale),
+        };
     const scamin_buckets: []const Bucket = &.{gate};
 
     // The single style builder: resolve every mariner-aware colour / icon / display
@@ -1048,7 +1071,7 @@ pub fn json(alloc: std.mem.Allocator, opts: Options) ![]u8 {
             // the clause to the live denominator regardless.
             .{ .denom = if (opts.scamin_cur_denom == 0) 1e12 else opts.scamin_cur_denom }
         else
-            .{ .zoom_k = scaminGateK(opts.scamin_lat) },
+            .{ .zoom_k = scaminGateKForSize(opts.scamin_lat, opts.size_scale) },
         .show_overscale = m.show_overscale,
         // A TEMPLATE (null mariner) keeps soundings visible; the client gates.
         .soundings_on = if (filters_on) (m.show_soundings orelse m.display_other) else true,
