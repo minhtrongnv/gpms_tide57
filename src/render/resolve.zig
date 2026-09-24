@@ -275,6 +275,19 @@ test "Colors: token -> RGB per palette, unknown -> null" {
     try std.testing.expectEqual(@as(?Rgb, null), c.get(.day, "NOSUCH"));
 }
 
+test "spot soundings stay independent of OTHER but still obey producer SCAMIN" {
+    const m = Settings{ .display_other = false, .show_soundings = true };
+    const snd = rs.FeatureMeta{
+        .display_category = 2,
+        .display_priority = 4,
+        .scamin = 60000,
+        .class = "SOUNDG",
+    };
+    const z_cut = std.math.log2(DENOM_Z0 / 60000.0);
+    try std.testing.expect(!visible(&snd, null, z_cut - 0.01, &m));
+    try std.testing.expect(visible(&snd, null, z_cut + 0.01, &m));
+}
+
 test "soundings ride their own switch, not the OTHER category" {
     // The everyday ECDIS setting: STANDARD category, soundings ON. Before the switch existed a
     // host had to turn OTHER on for this, and got the seabed/cables/clutter with it.
