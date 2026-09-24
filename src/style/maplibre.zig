@@ -1658,6 +1658,43 @@ test "json: the soundings switch drives the soundings layers' visibility" {
     try std.testing.expect(std.mem.indexOf(u8, on, "\"visibility\":\"none\"") == null);
 }
 
+test "json: dense soundings emit a single ungated spot layer" {
+    const a = std.testing.allocator;
+    const ct =
+        \\{"day":{"DEPDW":"#c9edff"},"dusk":{},"night":{}}
+    ;
+    const scamin = [_]u32{ 60000, 120000, 240000 };
+    const m = mariner.Settings{
+        .display_other = true,
+        .show_soundings = true,
+        .dense_soundings = true,
+    };
+
+    const out = try json(a, .{
+        .scheme = "day",
+        .colortables_json = ct,
+        .sprite = "sprite",
+        .glyphs = "glyphs/{fontstack}/{range}.pbf",
+        .source_tiles = "tile57://{z}/{x}/{y}",
+        .mariner = m,
+        .scamin = &scamin,
+    });
+    defer a.free(out);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, a, out, .{});
+    defer parsed.deinit();
+    const layers = parsed.value.object.get("layers").?.array.items;
+
+    var spot_count: usize = 0;
+    for (layers) |layer| {
+        const obj = layer.object;
+        const id = obj.get("id").?.string;
+        if (std.mem.eql(u8, id, "soundings")) spot_count += 1;
+        try std.testing.expect(!std.mem.startsWith(u8, id, "soundings#sm"));
+    }
+    try std.testing.expectEqual(@as(usize, 1), spot_count);
+}
+
 test "json: dense mode collision-thins spot soundings only" {
     const a = std.testing.allocator;
     const ct =
