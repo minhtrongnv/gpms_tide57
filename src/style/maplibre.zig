@@ -1563,6 +1563,11 @@ fn layerIndexById(layers: []std.json.Value, id: []const u8) ?usize {
     return null;
 }
 
+fn layerById(layers: []std.json.Value, id: []const u8) ?std.json.Value {
+    for (layers) |l| if (std.mem.eql(u8, l.object.get("id").?.string, id)) return l;
+    return null;
+}
+
 test "json: point z-order = display_priority alone (threshold partition + danger sort-value)" {
     const a = std.testing.allocator;
     const ct =
@@ -1641,6 +1646,61 @@ test "json: the soundings switch drives the soundings layers' visibility" {
     const on = try json(a, base);
     defer a.free(on);
     try std.testing.expect(std.mem.indexOf(u8, on, "\"visibility\":\"none\"") == null);
+}
+
+test "json: dense soundings declutter only spot SOUNDG" {
+    const a = std.testing.allocator;
+    const ct =
+        \\{"day":{"DEPDW":"#c9edff"},"dusk":{},"night":{}}
+    ;
+    const manifest = [_]i64{ 60000 };
+
+    var m = mariner.Settings{
+        .display_other = true,
+        .show_soundings = true,
+        .dense_soundings = true,
+    };
+    const out = try json(a, .{
+        .scheme = "day",
+        .colortables_json = ct,
+        .sprite = "sprite",
+        .glyphs = "glyphs/{fontstack}/{range}.pbf",
+        .source_tiles = "tile57://{z}/{x}/{y}",
+        .mariner = m,
+        .scamin = &manifest,
+    });
+    defer a.free(out);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, a, out, .{});
+    defer parsed.deinit();
+    const layers = parsed.value.object.get("layers").?.array.items;
+
+    const spot = layerById(layers, "soundings").?.object.get("layout").?.object;
+    try std.testing.expectEqual(false, spot.get("icon-allow-overlap").?.bool);
+    try std.testing.expectEqual(false, spot.get("icon-ignore-placement").?.bool);
+
+    const danger = layerById(layers, "danger_soundings").?.object.get("layout").?.object;
+    try std.testing.expectEqual(true, danger.get("icon-allow-overlap").?.bool);
+    try std.testing.expectEqual(true, danger.get("icon-ignore-placement").?.bool);
+
+    // Normal/current mode keeps the S-52 all-symbols behavior.
+    m.dense_soundings = false;
+    const strict = try json(a, .{
+        .scheme = "day",
+        .colortables_json = ct,
+        .sprite = "sprite",
+        .glyphs = "glyphs/{fontstack}/{range}.pbf",
+        .source_tiles = "tile57://{z}/{x}/{y}",
+        .mariner = m,
+        .scamin = &manifest,
+    });
+    defer a.free(strict);
+    var strict_parsed = try std.json.parseFromSlice(std.json.Value, a, strict, .{});
+    defer strict_parsed.deinit();
+    const strict_layers = strict_parsed.value.object.get("layers").?.array.items;
+    const strict_spot = layerById(strict_layers, "soundings").?.object.get("layout").?.object;
+    try std.testing.expectEqual(true, strict_spot.get("icon-allow-overlap").?.bool);
+    try std.testing.expectEqual(true, strict_spot.get("icon-ignore-placement").?.bool);
 }
 
 test "json: size_scale wraps icon/line/text sizes in a multiplier" {
