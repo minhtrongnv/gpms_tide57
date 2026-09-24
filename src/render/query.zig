@@ -35,6 +35,9 @@ pub const QuerySurface = struct {
     qy: f64,
     radius: f64, // near-hit radius for line/point features (tile units)
     view_zoom: f64, // the view zoom, for the SCAMIN visibility cull
+    /// Physical display scale multiplier (reference pitch / actual pitch).
+    /// Query APIs that do not carry mariner settings retain 1.0 compatibility.
+    size_scale: f64 = 1.0,
     cb: *const QueryCb,
     /// Catalogue symbol geometry, so a pick answers on the mark that is DRAWN.
     /// Null falls back to the anchor radius alone.
@@ -77,7 +80,7 @@ pub const QuerySurface = struct {
         self.hit = false;
         // Only report what the view actually shows: apply the same SCAMIN cull the
         // renderer does, so a zoomed-out click doesn't return finer-scale features.
-        self.visible = resolve.scaminVisible(meta.scamin, self.view_zoom);
+        self.visible = resolve.scaminVisible(meta.scamin, self.view_zoom, self.size_scale);
     }
     fn endFeature(ctx: *anyopaque) anyerror!void {
         const self = sp(ctx);

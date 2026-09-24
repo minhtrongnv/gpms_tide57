@@ -1679,7 +1679,7 @@ pub fn assemble(arena: Allocator, scratch: Allocator, scenes: []const Scene) !Sc
 /// live view zoom (its geometry is already shaped), rank the pool, emit. No
 /// re-shaping — that happened once, per tile, and was cached. `scratch` holds the
 /// pool; the result lives in `arena`.
-pub fn assembleLabels(arena: Allocator, scratch: Allocator, cands: []const LabelCandidate, view_zoom: f64, ignore_scamin: bool) !Scene {
+pub fn assembleLabels(arena: Allocator, scratch: Allocator, cands: []const LabelCandidate, view_zoom: f64, size_scale: f64, ignore_scamin: bool) !Scene {
     var pool = dc.Pool{};
     defer pool.deinit(scratch);
     // Fill-down symbols pool separately: symbols compete only with symbols
@@ -1695,7 +1695,7 @@ pub fn assembleLabels(arena: Allocator, scratch: Allocator, cands: []const Label
     for (cands, 0..) |c, i| {
         // SCAMIN at the view zoom — base category (0) is never hidden (S-52).
         if (!ignore_scamin and c.disp_cat != 0 and c.scamin > 0 and
-            !resolve.scaminVisible(@intFromFloat(c.scamin), view_zoom)) continue;
+            !resolve.scaminVisible(@intFromFloat(c.scamin), view_zoom, size_scale)) continue;
         // A contour value whose visible piece is too short to carry a legible run
         // at this zoom drops before the pool ranks it (mirrors the vector path).
         if (c.gate_world_len > 0 and @as(f64, c.gate_world_len) * s < LEGIBLE_PX) continue;
@@ -1792,7 +1792,7 @@ test "assembleLabels: fill-down symbols pool by priority; isolated and text unto
         mk.sym(0.9, 2),
         .{ .quads = &mk.q, .ax = 0.5, .ay = 0.5, .bx0 = -8, .by0 = -8, .bx1 = 8, .by1 = 8, .scamin = 0, .disp_cat = 1, .color = .{ 255, 255, 255, 255 }, .group = 10, .paint_key = 2, .cls = "T", .text = "name" },
     };
-    const scene = try assembleLabels(a, a, &cands, 4.0, false);
+    const scene = try assembleLabels(a, a, &cands, 4.0, 1.0, false);
     // priority-8 symbol + isolated symbol + the text label = 3 quads; the
     // priority-2 twin lost its space.
     try testing.expectEqual(@as(usize, 3), scene.quads.len);
@@ -2372,7 +2372,7 @@ const TextFixture = struct {
     /// The decluttered label scene at the fixture's zoom (the labels-only path).
     fn labelScene(self: *TextFixture, a: Allocator) !Scene {
         const cands = try self.gs.takeCandidates(a);
-        return assembleLabels(a, a, cands, 4.0, false);
+        return assembleLabels(a, a, cands, 4.0, self.gs.settings.size_scale, false);
     }
     /// Geometry + decluttered labels assembled, as renderGpuScene does per view.
     fn full(self: *TextFixture, a: Allocator) !Scene {
