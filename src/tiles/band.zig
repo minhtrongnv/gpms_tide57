@@ -3,6 +3,8 @@
 //! (which bakes each cell over its band's zooms) and the compositor (which reads
 //! the band to decide overscale fill-up), so neither owns the mapping.
 
+const std = @import("std");
+
 /// Native [minzoom, maxzoom] Web-Mercator span for a navigational-purpose band.
 pub const ZoomRange = struct { min: u8, max: u8 };
 
@@ -22,6 +24,35 @@ pub fn bandOf(cscl: i32) Band {
     if (n <= 500_000) return .coastal;
     if (n <= 2_300_000) return .general;
     return .overview;
+}
+
+// OpenCPN S-57 chart-selection scale: a vector chart remains normally usable
+// until the viewport denominator is about 4× the chart's native compilation scale
+// (s57chart::GetNormalScaleMax / Quilt::GetNomScaleMin with zoom modifier 0).
+// Convert that physical 1:N limit to the INTEGER source-tile zoom which first has
+// to carry the chart. We floor the fractional crossing because one z tile serves
+// the whole [z,z+1) display interval; ceil would make the chart appear up to one
+// full zoom late. This is computed once per cell when the compositor partition is
+// opened, never in the tile hot path.
+pub fn openCpnAdmissionFloor(cscl: i32, lat_deg: f64) u8 {
+    const native: f64 = @floatFromInt(if (cscl > 0) cscl else 50_000);
+    const max_denom = native * 4.0;
+    // Same physical reference used by the style/SCAMIN model: Web-Mercator
+    // metres/CSS-px at z0 divided by the 0.2645 mm reference CSS-pixel pitch.
+    const k = 78_271.516964020485 * @cos(lat_deg * std.math.pi / 180.0) / 0.0002645;
+    if (!(k > 0) or !(max_denom > 0)) return 0;
+    const z = std.math.log2(k / max_denom);
+    if (z <= 0) return 0;
+    if (z >= 24) return 24;
+    return @intFromFloat(@floor(z));
+}
+
+test "OpenCPN admission floor is two-scale-level chart admission, not NOAA band floor" {
+    // Chesapeake (~39N): an 1:80k approach chart is eligible by about 1:320k,
+    // whose crossing is z~9.5, so z9 must contain it. A 1:20k harbour chart
+    // crosses around z11.5 and therefore first needs a z11 source tile.
+    try std.testing.expectEqual(@as(u8, 9), openCpnAdmissionFloor(80_000, 39.0));
+    try std.testing.expectEqual(@as(u8, 11), openCpnAdmissionFloor(20_000, 39.0));
 }
 
 /// Overscale fill-up depth DEFAULT: how many zooms past its native max a band's
@@ -56,7 +87,6 @@ pub fn bandZooms(band: Band) ZoomRange {
 }
 
 test "bandOf maps compilation scale to band" {
-    const std = @import("std");
     try std.testing.expectEqual(Band.harbor, bandOf(20_000));
     try std.testing.expectEqual(Band.approach, bandOf(50_000));
     try std.testing.expectEqual(Band.overview, bandOf(3_000_000));
@@ -64,7 +94,6 @@ test "bandOf maps compilation scale to band" {
 }
 
 test "bandZooms is finest-to-coarsest with one-zoom overlap" {
-    const std = @import("std");
     try std.testing.expectEqual(ZoomRange{ .min = 11, .max = 13 }, bandZooms(.approach));
     try std.testing.expectEqual(ZoomRange{ .min = 9, .max = 11 }, bandZooms(.coastal));
 }
