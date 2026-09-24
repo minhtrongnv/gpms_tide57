@@ -83,8 +83,8 @@ type SoundingsMode uint8
 
 const (
 	SoundingsFollowCategory SoundingsMode = 0 // the old behaviour: OTHER controls them
-	SoundingsShow           SoundingsMode = 1 // show whatever the category says
-	SoundingsHide           SoundingsMode = 2 // hide whatever the category says
+	SoundingsShow           SoundingsMode = 1 // show independently of the OTHER category
+	SoundingsHide           SoundingsMode = 2 // hide independently of the OTHER category
 )
 
 // MarinerDefaults returns the canonical default mariner settings from libtile57.

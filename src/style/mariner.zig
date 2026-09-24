@@ -516,7 +516,27 @@ pub fn categoryFilter(b: B, m: *const Settings) !Value {
         b.int(isoCat),
         try b.coalesce(try b.get("display_category"), b.int(1)),
     });
-    const inCat = try b.arr(&.{ b.s("in"), cat, try b.arr(&.{ b.s("literal"), .{ .array = en } }) });
+    const rawInCat = try b.arr(&.{ b.s("in"), cat, try b.arr(&.{ b.s("literal"), .{ .array = en } }) });
+
+    // SOUNDG has an explicit mariner switch that is independent of the OTHER
+    // display category (resolve.categoryVisible uses the same rule). The
+    // MapLibre path used to apply only rawInCat here, so STANDARD + soundings ON
+    // still filtered every spot sounding before the layer visibility switch had
+    // a chance to show it. Conversely OTHER + soundings OFF depended solely on
+    // layer visibility. Fold the tri-state into the category predicate itself
+    // so vector-style and native-surface backends agree.
+    const inCat = if (m.show_soundings) |show| blk: {
+        const spot = try b.arr(&.{
+            b.s("=="),
+            try b.coalesce(try b.get("class"), b.s("")),
+            b.s("SOUNDG"),
+        });
+        break :blk if (show)
+            try b.arr(&.{ b.s("any"), spot, rawInCat })
+        else
+            try b.arr(&.{ b.s("all"), try b.arr(&.{ b.s("!"), spot }), rawInCat });
+    } else rawInCat;
+
     const isQual = try b.arr(&.{ b.s("=="), try b.get("mq"), b.int(1) });
     if (m.data_quality)
         return b.arr(&.{ b.s("any"), isQual, try b.arr(&.{ b.s("all"), inCat, try b.arr(&.{ b.s("!"), isQual }) }) });
@@ -703,4 +723,50 @@ pub fn commonChartFilters(a: std.mem.Allocator, m: *const Settings, enabled_band
             }),
         }));
     return clauses.items;
+}
+
+
+fn stringifyTestValue(a: std.mem.Allocator, value: Value) ![]u8 {
+    var aw: std.Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    var stringify: std.json.Stringify = .{ .writer = &aw.writer };
+    try stringify.write(value);
+    return aw.toOwnedSlice();
+}
+
+test "categoryFilter keeps the spot-soundings switch independent of OTHER" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const b = B{ .a = a };
+
+    var m = Settings{
+        .display_base = true,
+        .display_standard = true,
+        .display_other = false,
+        .show_soundings = true,
+    };
+    const on = try categoryFilter(b, &m);
+    const on_json = try stringifyTestValue(a, on);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        on_json,
+        "[\"==\",[\"coalesce\",[\"get\",\"class\"],\"\"],\"SOUNDG\"]",
+    ) != null);
+
+    m.display_other = true;
+    m.show_soundings = false;
+    const off = try categoryFilter(b, &m);
+    const off_json = try stringifyTestValue(a, off);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        off_json,
+        "[\"!\",[\"==\",[\"coalesce\",[\"get\",\"class\"],\"\"],\"SOUNDG\"]]",
+    ) != null);
+
+    m.show_soundings = null;
+    const legacy = try categoryFilter(b, &m);
+    const legacy_json = try stringifyTestValue(a, legacy);
+    // Follow-category mode needs no SOUNDG-specific category exception.
+    try std.testing.expect(std.mem.indexOf(u8, legacy_json, "\"SOUNDG\"") == null);
 }
