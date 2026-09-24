@@ -943,12 +943,10 @@ fn contourLabelLayer(js: *Stringify, s: *const SCtx, sl: []const u8, bkt: Bucket
     try js.endObject();
 }
 
-// Soundings are SYMBOLS: the Presentation Library draws a sounding as symbol
-// glyphs so it stays legible and correctly located, and every symbol must be
-// drawn — S-52 defines suppression only for coincident lines and area
-// boundaries. Normal/current mode therefore never culls soundings. The one
-// Sounding density is controlled by producer SCAMIN. The host's soundings switch
-// controls visibility only; it never relaxes the feature's scale gate.
+// Soundings are S-52 symbol glyphs. The host's soundings switch controls their
+// visibility, while producer SCAMIN controls when spot SOUNDG becomes eligible.
+// There is no separate host "dense" override: this matches OpenCPN's normal
+// Vector Zoom/Scale Weighting = 0 behaviour.
 //
 // The soundings source-layer still splits into two style layers, but on PAINT
 // ORDER, not collision: a DANGER depth (a wreck/obstruction/rock sounding) is
