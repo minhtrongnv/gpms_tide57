@@ -963,10 +963,17 @@ fn soundingsLayer(js: *Stringify, s: *const SCtx, bkt: Bucket, id: []const u8, f
     try js.write(s.sound_img);
     try js.objectField("icon-size");
     try writeScaled(js, ICON_SIZE, s.size_scale);
+    // Strict/current mode follows S-52: every sounding symbol draws and SCAMIN
+    // controls density. Dense mode deliberately makes more SOUNDG eligible, so
+    // drawing every one becomes an unreadable carpet as the chart zooms in.
+    // In that opt-in mode only spot SOUNDG participate in MapLibre's collision
+    // grid. Higher text layers retain placement priority; ordinary point symbols
+    // ignore collisions; danger depths stay always-on.
+    const declutter_spot = spot and s.dense_soundings;
     try js.objectField("icon-allow-overlap");
-    try js.write(true);
+    try js.write(!declutter_spot);
     try js.objectField("icon-ignore-placement");
-    try js.write(true);
+    try js.write(!declutter_spot);
     try js.endObject();
     try js.endObject();
 }
