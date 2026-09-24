@@ -44,10 +44,10 @@ const TEXT_FONT = .{
 // the uncalibrated CSS pixel; K is latitude-corrected and calibrated. See
 // scaminGateK() / writeScaminClause's .zoom_gate branch.
 
-// Physical-scale constants from the web client (web/src/lib/util.mjs), so an engine
-// SCAMIN bucket's native minzoom MATCHES the JS client's scaminDisplayZoom (the §7
-// render-parity gate). The client DISPLAY cutoff uses the calibrated 0.2645 mm CSS
-// pixel (NOT the 0.28 mm OGC pixel the bake floor / Go scaminZoom use, ≈279.5M).
+// Physical-scale constants from the web client (web/src/lib/util.mjs). Baked `vz`
+// uses the 0.2645 mm CSS reference pitch, while the live style shifts that admission
+// zoom by log2(size_scale) so a manually calibrated screen follows the same physical
+// 1:N cutoff OpenCPN derives from pixels/mm.
 const M_PER_PX_Z0 = 78271.516964020485; // metres / CSS-px at z0, equator (512-tile)
 const DEFAULT_PX_PITCH_MM = 0.2645; // calibrated CSS-pixel pitch (NOT the OGC 0.28 mm)
 
@@ -62,12 +62,34 @@ pub fn scaminDisplayZoom(scamin: f64, lat: f64) f64 {
     return std.math.clamp(z, 0, 24);
 }
 
-/// The per-archive display-denominator constant K such that the on-screen 1:N
-/// denominator at Web-Mercator `zoom` is K / 2^zoom (== displayDenom). Baked into the
-/// static SCAMIN/oscl gate at the archive-center latitude; the SAME constant the
-/// bucket path computes (json). Replaces the old equator-only OGC DENOM_Z0.
+/// Reference-display denominator constant K (0.2645 mm/CSS px). The live merged
+/// style multiplies this by size_scale = reference_pitch / actual_pitch.
 pub fn scaminGateK(lat: f64) f64 {
     return M_PER_PX_Z0 * @cos(lat * std.math.pi / 180.0) / (DEFAULT_PX_PITCH_MM / 1000.0);
+}
+
+
+fn physicalScaleMultiplier(size_scale: f64) f64 {
+    // size_scale is the host's CSS-reference-pitch / actual-pitch ratio.
+    // Zero/unset from an older host means the reference display.
+    return if (size_scale > 0) size_scale else 1.0;
+}
+
+fn scaminGateKForSize(lat: f64, size_scale: f64) f64 {
+    return scaminGateK(lat) * physicalScaleMultiplier(size_scale);
+}
+
+fn scaminZoomShift(size_scale: f64) f64 {
+    return std.math.log2(physicalScaleMultiplier(size_scale));
+}
+
+test "physical screen size shifts merged SCAMIN at the same 1:N scale" {
+    const lat = 38.9;
+    const ref_k = scaminGateKForSize(lat, 1.0);
+    const half_pitch = scaminGateKForSize(lat, 2.0);
+    try std.testing.expectApproxEqRel(ref_k * 2.0, half_pitch, 1e-12);
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), scaminZoomShift(2.0), 1e-12);
+    try std.testing.expectApproxEqAbs(@as(f64, -1.0), scaminZoomShift(0.5), 1e-12);
 }
 
 test "scaminGateK: K/2^zoom equals displayDenom (one gate constant)" {
@@ -134,18 +156,6 @@ const FILT_DOTTED = .{ "==", .{ "get", "dash" }, "dotted" };
 // engine SYMBOL_SCALE is the unit: a feature at that scale samples 1:1.
 const MLN_BAKE_SCALE: f64 = 0.02834627777338028;
 const ICON_SIZE = .{ "/", .{ "coalesce", .{ "get", "scale" }, 0.08 }, MLN_BAKE_SCALE };
-const DENSE_SOUNDING_PADDING = .{
-    "interpolate",
-    .{ "linear" },
-    .{ "zoom" },
-    9, 2,
-    10, 4,
-    11, 10,
-    12, 18,
-    13, 24,
-    14, 30,
-};
-
 
 const VROW = .{ "match", .{ "coalesce", .{ "get", "valign" }, "middle" }, "top", "top", "bottom", "bottom", "center" };
 const TEXT_ANCHOR = .{
@@ -288,10 +298,6 @@ const SCtx = struct {
     // Visibility, not a filter: a toggle is then a one-op visibility diff
     // instead of a whole-tile re-layout.
     soundings_on: bool,
-    // Dense mode exposes more SOUNDG than producer SCAMIN alone would. In the
-    // browser those extra spot depths are screen-space decluttered so zooming in
-    // does not turn the water into a wall of numbers.
-    dense_soundings: bool,
 };
 
 // Display-denominator gate value for the overscale clauses.
@@ -379,7 +385,8 @@ fn layerHead(js: *Stringify, id: []const u8, kind: []const u8, source_layer: []c
 // non-SCAMIN feature coalesces past every gate (coalesce(scamin,1e12) >= D).
 const Bucket = struct {
     zoom_gate: bool = false, // default merged mode: AND the static K/2^zoom SCAMIN gate
-    zoom_k: f64 = 0, // zoom_gate: the per-archive display-denominator constant K (scaminGateK)
+    zoom_k: f64 = 0, // zoom_gate: current physical-display denominator constant K
+    zoom_shift: f64 = 0, // add to baked reference-pitch vz for this screen's px pitch
     filter_gate: bool = false, // scamin-layers.md: the live client-driven SCAMIN clause (?scaminexact)
     cur_denom: f64 = 0, // filter_gate: the current-display-scale denominator literal (client-overwritten)
     suffix: []const u8 = "", // id suffix: "#oscl" (overscaled fill pass) / "" (plain)
@@ -414,10 +421,15 @@ const SCAMIN_COALESCE_MAX = 1000000000000; // 1e12
 // filter-gate (?scaminexact) or the static zoom-gate (the default merged mode). A
 // non-SCAMIN feature coalesces to 1e12 (>= any denominator) and always passes.
 fn writeScaminClause(js: *Stringify, bkt: Bucket) !void {
+    // OpenCPN/S-52 parity: SCAMIN is not applied to Display Base or Group-1
+    // features, even if an ENC carries a spurious SCAMIN on them.
+    try js.beginArray();
+    try js.write("any");
+    try js.write(.{ "==", .{ "coalesce", .{ "get", "display_category" }, 1 }, 0 });
+    try js.write(.{ "==", .{ "coalesce", .{ "get", "display_priority" }, -1 }, 1 });
+
     if (bkt.filter_gate) {
-        // scamin-layers.md: [">=", ["coalesce", ["get","scamin"], 1e12], curDenom].
-        // The live client rewrites curDenom via setFilter at the discrete SCAMIN boundary
-        // crossings; the emitted literal is the standalone default (0 => show all).
+        // Exact/live physical-display denominator.
         try js.beginArray();
         try js.write(">=");
         try js.beginArray();
@@ -427,40 +439,32 @@ fn writeScaminClause(js: *Stringify, bkt: Bucket) !void {
         try js.endArray();
         try js.write(bkt.cur_denom);
         try js.endArray();
-        return;
-    }
-    // zoom_gate (the only other clause-bearing mode; has_clause guarantees it):
-    // tile57/3 bakes the fractional admission zoom into `vz`, so current
-    // archives stay on the cheap get+compare path. Older tile57/2 archives
-    // carry only raw `scamin`; using a literal 0 fallback for missing `vz`
-    // made EVERY SCAMIN'd feature visible at every zoom when a live compositor
-    // was opened over a stale cache. That is exactly the "all symbols at
-    // overview scale" failure mode.
-    //
-    // Coalesce lazily falls back to the old mathematically-equivalent gate only
-    // when `vz` is absent:
-    //
-    //   vz = log2(K / scamin)
-    //   show when vz <= zoom
-    //
-    // Missing SCAMIN coalesces to a huge denominator, yielding a negative
-    // admission zoom and therefore remaining always-visible as before.
-    try js.write(.{
-        "<=",
-        .{
-            "coalesce",
-            .{ "get", "vz" },
+    } else {
+        // Merged mode: current archives carry reference-pitch admission zoom (vz).
+        // Correct it for this screen with zoom_shift; old archives fall back to raw
+        // SCAMIN + the current physical-display K.
+        try js.write(.{
+            "<=",
             .{
-                "log2",
+                "coalesce",
                 .{
-                    "/",
-                    bkt.zoom_k,
-                    .{ "coalesce", .{ "get", "scamin" }, SCAMIN_COALESCE_MAX },
+                    "+",
+                    .{ "get", "vz" },
+                    bkt.zoom_shift,
+                },
+                .{
+                    "log2",
+                    .{
+                        "/",
+                        bkt.zoom_k,
+                        .{ "coalesce", .{ "get", "scamin" }, SCAMIN_COALESCE_MAX },
+                    },
                 },
             },
-        },
-        .{"zoom"},
-    });
+            .{"zoom"},
+        });
+    }
+    try js.endArray();
 }
 
 // Write a layer's `filter`. The filter ANDs together (in order): the `base` predicate
@@ -939,13 +943,10 @@ fn contourLabelLayer(js: *Stringify, s: *const SCtx, sl: []const u8, bkt: Bucket
     try js.endObject();
 }
 
-// Soundings are SYMBOLS: the Presentation Library draws a sounding as symbol
-// glyphs so it stays legible and correctly located, and every symbol must be
-// drawn — S-52 defines suppression only for coincident lines and area
-// boundaries. Normal/current mode therefore never culls soundings. The one
-// deliberate browser exception is the host's opt-in dense mode: extra spot
-// SOUNDG are screen-space decluttered after SCAMIN is relaxed so the chart stays
-// readable; danger depths remain unconditional symbols.
+// Soundings are S-52 symbol glyphs. The host's soundings switch controls their
+// visibility, while producer SCAMIN controls when spot SOUNDG becomes eligible.
+// There is no separate host "dense" override: this matches OpenCPN's normal
+// Vector Zoom/Scale Weighting = 0 behaviour.
 //
 // The soundings source-layer still splits into two style layers, but on PAINT
 // ORDER, not collision: a DANGER depth (a wreck/obstruction/rock sounding) is
@@ -956,10 +957,10 @@ fn contourLabelLayer(js: *Stringify, s: *const SCtx, sl: []const u8, bkt: Bucket
 const FILT_SPOT_SND = .{ "==", .{ "coalesce", .{ "get", "class" }, "SOUNDG" }, "SOUNDG" };
 const FILT_DANGER_SND = .{ "!=", .{ "coalesce", .{ "get", "class" }, "SOUNDG" }, "SOUNDG" };
 
-fn soundingsLayer(js: *Stringify, s: *const SCtx, bkt: Bucket, id: []const u8, filt: anytype, comptime spot: bool) !void {
+fn soundingsLayer(js: *Stringify, s: *const SCtx, bkt: Bucket, id: []const u8, filt: anytype) !void {
     try js.beginObject();
     try layerHead(js, id, "symbol", "soundings");
-    try applyBucket(js, filt, true, bkt, s, null); // soundings (band-quilted)
+    try applyBucket(js, filt, true, bkt, s, null); // producer SCAMIN + band quilt
     try js.objectField("layout");
     try js.beginObject();
     try js.objectField("visibility");
@@ -968,28 +969,12 @@ fn soundingsLayer(js: *Stringify, s: *const SCtx, bkt: Bucket, id: []const u8, f
     try js.write(s.sound_img);
     try js.objectField("icon-size");
     try writeScaled(js, ICON_SIZE, s.size_scale);
-
-    // Dense mode relaxes SCAMIN only for spot SOUNDG. Let MapLibre thin those
-    // extra spot-depth sprites in screen space so zoomed-in views remain readable.
-    // Normal soundings and all danger depths keep the existing always-draw behavior.
-    const declutter_spot = spot and s.dense_soundings;
+    // Match OpenCPN/S-52 behaviour: SOUNDG density comes from producer SCAMIN,
+    // not an extra host "dense" override. Every eligible sounding symbol draws.
     try js.objectField("icon-allow-overlap");
-    try js.write(!declutter_spot);
+    try js.write(true);
     try js.objectField("icon-ignore-placement");
-    try js.write(!declutter_spot);
-    if (declutter_spot) {
-        // Default MapLibre icon-padding is only 2 px, which is too small for the
-        // extra SOUNDG made eligible by dense mode. Increase screen-space spacing
-        // smoothly with zoom so ~1:200k stays detailed while ~1:100k does not
-        // collapse into a carpet of numbers.
-        try js.objectField("icon-padding");
-        try js.write(DENSE_SOUNDING_PADDING);
-
-        // When two spot depths compete for the same collision area, prefer the
-        // shallower one. Lower symbol-sort-key values place first in MapLibre.
-        try js.objectField("symbol-sort-key");
-        try js.write(.{ "coalesce", .{ "get", "depth" }, 1.0e9 });
-    }
+    try js.write(true);
     try js.endObject();
     try js.endObject();
 }
@@ -1039,7 +1024,11 @@ pub fn json(alloc: std.mem.Allocator, opts: Options) ![]u8 {
     else if (opts.scamin_filter_gate)
         .{ .filter_gate = true, .cur_denom = opts.scamin_cur_denom }
     else
-        .{ .zoom_gate = true, .zoom_k = scaminGateK(opts.scamin_lat) };
+        .{
+            .zoom_gate = true,
+            .zoom_k = scaminGateKForSize(opts.scamin_lat, opts.size_scale),
+            .zoom_shift = scaminZoomShift(opts.size_scale),
+        };
     const scamin_buckets: []const Bucket = &.{gate};
 
     // The single style builder: resolve every mariner-aware colour / icon / display
@@ -1080,11 +1069,10 @@ pub fn json(alloc: std.mem.Allocator, opts: Options) ![]u8 {
             // the clause to the live denominator regardless.
             .{ .denom = if (opts.scamin_cur_denom == 0) 1e12 else opts.scamin_cur_denom }
         else
-            .{ .zoom_k = scaminGateK(opts.scamin_lat) },
+            .{ .zoom_k = scaminGateKForSize(opts.scamin_lat, opts.size_scale) },
         .show_overscale = m.show_overscale,
         // A TEMPLATE (null mariner) keeps soundings visible; the client gates.
         .soundings_on = if (filters_on) (m.show_soundings orelse m.display_other) else true,
-        .dense_soundings = if (filters_on) m.dense_soundings else false,
     };
 
     var aw: std.Io.Writer.Allocating = .init(alloc);
@@ -1189,25 +1177,15 @@ pub fn json(alloc: std.mem.Allocator, opts: Options) ![]u8 {
     //   set per SCAMIN bucket rides each pass.
     if (sprite_on) {
         for (scamin_buckets) |bkt| try pointSymbolLayers(js, &s, "point_symbols", bkt, .base);
-        if (m.dense_soundings) {
-            // Dense mode intentionally removes the SCAMIN bucket gate for spot
-            // soundings. Emit ONE ungated layer. Emitting one ungated copy per
-            // SCAMIN bucket duplicates the same SOUNDG candidate pool many times,
-            // defeating collision thinning and creating the "wall of numbers"
-            // seen around ~1:95k.
-            try soundingsLayer(js, &s, .{}, "soundings", FILT_SPOT_SND, true);
-        } else {
-            for (scamin_buckets) |bkt| {
-                var sbuf: [96]u8 = undefined;
-                try soundingsLayer(
-                    js,
-                    &s,
-                    bkt,
-                    try std.fmt.bufPrint(&sbuf, "soundings{s}", .{bkt.suffix}),
-                    FILT_SPOT_SND,
-                    true,
-                );
-            }
+        for (scamin_buckets) |bkt| {
+            var sbuf: [96]u8 = undefined;
+            try soundingsLayer(
+                js,
+                &s,
+                bkt,
+                try std.fmt.bufPrint(&sbuf, "soundings{s}", .{bkt.suffix}),
+                FILT_SPOT_SND,
+            );
         }
         // Over-soundings pass: high-priority symbols + the danger deviation (see PointMode).
         for (scamin_buckets) |bkt| try pointSymbolLayers(js, &s, "point_symbols", bkt, .dangers_only);
@@ -1215,7 +1193,7 @@ pub fn json(alloc: std.mem.Allocator, opts: Options) ![]u8 {
         // below the opaque DANGER01/02 ovals the depths would be invisible.
         for (scamin_buckets) |bkt| {
             var dbuf: [96]u8 = undefined;
-            try soundingsLayer(js, &s, bkt, try std.fmt.bufPrint(&dbuf, "danger_soundings{s}", .{bkt.suffix}), FILT_DANGER_SND, false);
+            try soundingsLayer(js, &s, bkt, try std.fmt.bufPrint(&dbuf, "danger_soundings{s}", .{bkt.suffix}), FILT_DANGER_SND);
         }
         // LIGHTS on top: emitted after every other point symbol so a light always draws
         // over a same-priority bridge that lives in a different scamin bucket layer.
@@ -1565,7 +1543,8 @@ test "json: ignore_scamin drops SCAMIN gating (no buckets, no zoom-gate)" {
     // gate compares the baked vz against ["zoom"].
     const gated = try json(a, base);
     defer a.free(gated);
-    try std.testing.expect(std.mem.indexOf(u8, gated, "[\"<=\",[\"coalesce\",[\"get\",\"vz\"],[\"log2\",[\"/\",") != null);
+    try std.testing.expect(std.mem.indexOf(u8, gated, "\"vz\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, gated, "\"log2\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, gated, "#sm") == null);
 
     // Manifest present, ignore_scamin -> no buckets at all.
@@ -1580,7 +1559,7 @@ test "json: ignore_scamin drops SCAMIN gating (no buckets, no zoom-gate)" {
     nomanifest.scamin = &.{};
     const out_fb = try json(a, nomanifest);
     defer a.free(out_fb);
-    try std.testing.expect(std.mem.indexOf(u8, out_fb, "[\"<=\",[\"coalesce\",[\"get\",\"vz\"],[\"log2\",[\"/\",") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out_fb, "\"vz\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, out_fb, "#sm") == null);
     try std.testing.expect(std.mem.indexOf(u8, out_fb, "\"log2\"") != null); // stale tile57/2 fallback
 
@@ -1681,129 +1660,6 @@ test "json: the soundings switch drives the soundings layers' visibility" {
     const on = try json(a, base);
     defer a.free(on);
     try std.testing.expect(std.mem.indexOf(u8, on, "\"visibility\":\"none\"") == null);
-}
-
-test "json: dense soundings emit a single ungated spot layer" {
-    const a = std.testing.allocator;
-    const ct =
-        \\{"day":{"DEPDW":"#c9edff"},"dusk":{},"night":{}}
-    ;
-    const scamin = [_]u32{ 60000, 120000, 240000 };
-    const m = mariner.Settings{
-        .display_other = true,
-        .show_soundings = true,
-        .dense_soundings = true,
-    };
-
-    const out = try json(a, .{
-        .scheme = "day",
-        .colortables_json = ct,
-        .sprite = "sprite",
-        .glyphs = "glyphs/{fontstack}/{range}.pbf",
-        .source_tiles = "tile57://{z}/{x}/{y}",
-        .mariner = m,
-        .scamin = &scamin,
-    });
-    defer a.free(out);
-
-    var parsed = try std.json.parseFromSlice(std.json.Value, a, out, .{});
-    defer parsed.deinit();
-    const layers = parsed.value.object.get("layers").?.array.items;
-
-    var spot_count: usize = 0;
-    for (layers) |layer| {
-        const obj = layer.object;
-        const id = obj.get("id").?.string;
-        if (std.mem.eql(u8, id, "soundings")) spot_count += 1;
-        try std.testing.expect(!std.mem.startsWith(u8, id, "soundings#sm"));
-    }
-    try std.testing.expectEqual(@as(usize, 1), spot_count);
-}
-
-test "json: dense soundings use zoom-adaptive padding and shallow-first priority" {
-    const a = std.testing.allocator;
-    const ct =
-        \\{"day":{"DEPDW":"#c9edff"},"dusk":{},"night":{}}
-    ;
-    const m = mariner.Settings{
-        .display_other = true,
-        .show_soundings = true,
-        .dense_soundings = true,
-    };
-
-    const out = try json(a, .{
-        .scheme = "day",
-        .colortables_json = ct,
-        .sprite = "sprite",
-        .glyphs = "glyphs/{fontstack}/{range}.pbf",
-        .source_tiles = "tile57://{z}/{x}/{y}",
-        .mariner = m,
-    });
-    defer a.free(out);
-
-    var parsed = try std.json.parseFromSlice(std.json.Value, a, out, .{});
-    defer parsed.deinit();
-    const layers = parsed.value.object.get("layers").?.array.items;
-    const layout = layerById(layers, "soundings").?.object.get("layout").?.object;
-
-    const padding = layout.get("icon-padding") orelse return error.TestExpectedEqual;
-    try std.testing.expect(padding == .array);
-    const sort_key = layout.get("symbol-sort-key") orelse return error.TestExpectedEqual;
-    try std.testing.expect(sort_key == .array);
-
-    const danger_layout = layerById(layers, "danger_soundings").?.object.get("layout").?.object;
-    try std.testing.expect(danger_layout.get("icon-padding") == null);
-    try std.testing.expect(danger_layout.get("symbol-sort-key") == null);
-}
-
-test "json: dense mode collision-thins spot soundings only" {
-    const a = std.testing.allocator;
-    const ct =
-        \\{"day":{"DEPDW":"#c9edff"},"dusk":{},"night":{}}
-    ;
-    var m = mariner.Settings{
-        .display_other = true,
-        .show_soundings = true,
-        .dense_soundings = true,
-    };
-
-    const dense = try json(a, .{
-        .scheme = "day",
-        .colortables_json = ct,
-        .sprite = "sprite",
-        .glyphs = "glyphs/{fontstack}/{range}.pbf",
-        .source_tiles = "tile57://{z}/{x}/{y}",
-        .mariner = m,
-    });
-    defer a.free(dense);
-    var parsed = try std.json.parseFromSlice(std.json.Value, a, dense, .{});
-    defer parsed.deinit();
-    const layers = parsed.value.object.get("layers").?.array.items;
-
-    const spot = layerById(layers, "soundings").?.object.get("layout").?.object;
-    try std.testing.expectEqual(false, spot.get("icon-allow-overlap").?.bool);
-    try std.testing.expectEqual(false, spot.get("icon-ignore-placement").?.bool);
-
-    const danger = layerById(layers, "danger_soundings").?.object.get("layout").?.object;
-    try std.testing.expectEqual(true, danger.get("icon-allow-overlap").?.bool);
-    try std.testing.expectEqual(true, danger.get("icon-ignore-placement").?.bool);
-
-    m.dense_soundings = false;
-    const strict = try json(a, .{
-        .scheme = "day",
-        .colortables_json = ct,
-        .sprite = "sprite",
-        .glyphs = "glyphs/{fontstack}/{range}.pbf",
-        .source_tiles = "tile57://{z}/{x}/{y}",
-        .mariner = m,
-    });
-    defer a.free(strict);
-    var strict_parsed = try std.json.parseFromSlice(std.json.Value, a, strict, .{});
-    defer strict_parsed.deinit();
-    const strict_layers = strict_parsed.value.object.get("layers").?.array.items;
-    const strict_spot = layerById(strict_layers, "soundings").?.object.get("layout").?.object;
-    try std.testing.expectEqual(true, strict_spot.get("icon-allow-overlap").?.bool);
-    try std.testing.expectEqual(true, strict_spot.get("icon-ignore-placement").?.bool);
 }
 
 test "json: size_scale wraps icon/line/text sizes in a multiplier" {
@@ -1996,14 +1852,16 @@ test "buildFromTemplateScamin: a manifest no longer buckets — the merged zoom-
     // No manifest -> the baked-vz SCAMIN zoom-gate, no #sm buckets.
     const plain = try buildFromTemplate(a, cs_template, &m, cs_ct, null, 1700000000);
     defer a.free(plain);
-    try std.testing.expect(std.mem.indexOf(u8, plain, "[\"<=\",[\"coalesce\",[\"get\",\"vz\"],[\"log2\",[\"/\",") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plain, "\"vz\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plain, "\"log2\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, plain, "#sm") == null);
     // With a manifest -> STILL the merged zoom-gate (per-value buckets retired): the
     // manifest no longer produces #sm layers, only the TileJSON ladder (served apart).
     const scamin = [_]u32{ 89999, 259999 };
     const bucketed = try buildFromTemplateScamin(a, cs_template, &m, cs_ct, null, 1700000000, &scamin, 38.0);
     defer a.free(bucketed);
-    try std.testing.expect(std.mem.indexOf(u8, bucketed, "[\"<=\",[\"coalesce\",[\"get\",\"vz\"],[\"log2\",[\"/\",") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bucketed, "\"vz\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bucketed, "\"log2\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, bucketed, "#sm") == null);
     try std.testing.expect(std.mem.indexOf(u8, bucketed, "\"log2\"") != null);
 }
@@ -2320,7 +2178,8 @@ test "json: both merged modes (zoom-gate default, filter-gate exact) give one la
     defer a.free(merged);
     try std.testing.expect(std.mem.indexOf(u8, merged, "#sm") == null);
     try expectOnlyPlacementMinzooms(merged);
-    try std.testing.expect(std.mem.indexOf(u8, merged, "[\"<=\",[\"coalesce\",[\"get\",\"vz\"],[\"log2\",[\"/\",") != null);
+    try std.testing.expect(std.mem.indexOf(u8, merged, "\"vz\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, merged, "\"log2\"") != null);
 
     // Filter-gate (?scaminexact): one live-clause layer per family — the SAME layer
     // set, with the client-driven curDenom clause instead of the zoom expression.

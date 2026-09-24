@@ -166,17 +166,16 @@ pub fn categoryVisible(cat: ?i64, class: []const u8, symbol_name: ?[]const u8, m
     };
 }
 
-/// 1:N scale denominator of the whole world in one 256px tile at z0 — the
-/// constant the style's SCAMIN gate divides by (style/maplibre.zig SCAMIN_GATE).
-pub const DENOM_Z0 = 279541132.0;
+/// Reference-screen 1:N denominator at z0 for the same 0.2645 mm CSS pitch used
+/// by the MapLibre style. A calibrated display multiplies this by size_scale
+/// (reference_pitch / actual_pitch), exactly like the merged browser gate.
+pub const DENOM_Z0 = 295922559.41028535;
 
-/// SCAMIN gate at a (fractional) display zoom — mirrors the style expression
-/// `zoom >= log2(DENOM_Z0 / scamin)` (style/maplibre.zig SCAMIN_GATE). A feature
-/// without SCAMIN (null) always shows.
-pub fn scaminVisible(scamin: ?i64, zoom: f64) bool {
+pub fn scaminVisible(scamin: ?i64, zoom: f64, size_scale: f64) bool {
     const s = scamin orelse return true;
     if (s <= 0) return true;
-    return zoom >= std.math.log2(DENOM_Z0 / @as(f64, @floatFromInt(s)));
+    const k = DENOM_Z0 * (if (size_scale > 0) size_scale else 1.0);
+    return zoom >= std.math.log2(k / @as(f64, @floatFromInt(s)));
 }
 
 /// Overscale gate (S-52 §10.1.10.2) — the AP(OVERSC01) hatch over a cell's M_COVR
@@ -185,9 +184,10 @@ pub fn scaminVisible(scamin: ?i64, zoom: f64) bool {
 /// (bake_enc.overscaleGateDenom = cscl/OVERSCALE_FACTOR), so this fires from X2 and
 /// NEVER before 1x compilation scale. The style clause is a strict `>` (oscl >
 /// DENOM); oscl 0 (unknown) never shows. Mirrors style/maplibre.zig writeOsclClause.
-pub fn osclVisible(oscl: i64, zoom: f64) bool {
+pub fn osclVisible(oscl: i64, zoom: f64, size_scale: f64) bool {
     if (oscl <= 0) return false;
-    return zoom > std.math.log2(DENOM_Z0 / @as(f64, @floatFromInt(oscl)));
+    const k = DENOM_Z0 * (if (size_scale > 0) size_scale else 1.0);
+    return zoom > std.math.log2(k / @as(f64, @floatFromInt(oscl)));
 }
 
 /// Viewing-group gate (S-52 §14.5) — the deny-list model of
@@ -219,15 +219,15 @@ pub fn textGroupVisible(group: i64, m: *const Settings) bool {
 pub fn visible(meta: *const rs.FeatureMeta, symbol_name: ?[]const u8, zoom: f64, m: *const Settings) bool {
     if (!categoryVisible(meta.display_category, meta.class, symbol_name, m)) return false;
     if (!viewingGroupVisible(meta.vg, m.viewing_groups_off)) return false;
-    const dense_spot_sounding = m.dense_soundings and std.mem.eql(u8, meta.class, "SOUNDG");
-    if (!m.ignore_scamin and !dense_spot_sounding and !scaminVisible(meta.scamin, zoom)) return false;
+    const scamin_exempt = meta.display_category == 0 or meta.display_priority == 1;
+    if (!m.ignore_scamin and !scamin_exempt and !scaminVisible(meta.scamin, zoom, m.size_scale)) return false;
     // The AP(OVERSC01) overscale hatch (S-52 §10.1.10): the mariner toggle, plus
     // the oscl scale gate. Hidden under ignore_scamin (the debug toggle drops all
     // scale gating — an always-on hatch would bury the debug view), mirroring the
     // style builder, which omits the overscale layer entirely there.
     if (meta.overscale) {
         if (!m.show_overscale or m.ignore_scamin) return false;
-        if (!osclVisible(meta.oscl, zoom)) return false;
+        if (!osclVisible(meta.oscl, zoom, m.size_scale)) return false;
     }
     // S-52 display-variant passes (mirrors mariner.boundaryFilter /
     // pointStyleFilter): a feature portrayed twice carries bnd 1/0 (symbolized/
@@ -273,6 +273,19 @@ test "Colors: token -> RGB per palette, unknown -> null" {
     try std.testing.expectEqual(Rgb{ .r = 25, .g = 35, .b = 40 }, c.get(.night, "DEPMS").?);
     try std.testing.expectEqual(@as(?Rgb, null), c.get(.dusk, "CHBLK")); // dusk fixture lacks it
     try std.testing.expectEqual(@as(?Rgb, null), c.get(.day, "NOSUCH"));
+}
+
+test "spot soundings stay independent of OTHER but still obey producer SCAMIN" {
+    const m = Settings{ .display_other = false, .show_soundings = true };
+    const snd = rs.FeatureMeta{
+        .display_category = 2,
+        .display_priority = 4,
+        .scamin = 60000,
+        .class = "SOUNDG",
+    };
+    const z_cut = std.math.log2(DENOM_Z0 / 60000.0);
+    try std.testing.expect(!visible(&snd, null, z_cut - 0.01, &m));
+    try std.testing.expect(visible(&snd, null, z_cut + 0.01, &m));
 }
 
 test "soundings ride their own switch, not the OTHER category" {
@@ -347,11 +360,31 @@ test "categoryVisible mirrors mariner.categoryFilter" {
 }
 
 test "scaminVisible mirrors the style SCAMIN_GATE" {
-    // 1:30000 gates at log2(279541132/30000) ~= 13.186.
-    try std.testing.expect(!scaminVisible(30000, 13.0));
-    try std.testing.expect(scaminVisible(30000, 13.2));
-    try std.testing.expect(scaminVisible(null, 0)); // no SCAMIN -> always
-    try std.testing.expect(scaminVisible(0, 0)); // degenerate 0 -> always
+    // 1:30000 gates at log2(295922559/30000) ~= 13.268 on the CSS-reference display.
+    try std.testing.expect(!scaminVisible(30000, 13.2, 1.0));
+    try std.testing.expect(scaminVisible(30000, 13.3, 1.0));
+    try std.testing.expect(scaminVisible(null, 0, 1.0)); // no SCAMIN -> always
+    try std.testing.expect(scaminVisible(0, 0, 1.0)); // degenerate 0 -> always
+}
+
+test "visible ignores SCAMIN for Display Base and Group 1 like OpenCPN" {
+    const m = Settings{};
+    const base = rs.FeatureMeta{ .display_category = 0, .display_priority = 5, .scamin = 1000, .class = "LNDARE" };
+    const group1 = rs.FeatureMeta{ .display_category = 1, .display_priority = 1, .scamin = 1000, .class = "DEPARE" };
+    const ordinary = rs.FeatureMeta{ .display_category = 1, .display_priority = 5, .scamin = 1000, .class = "BOYLAT" };
+    try std.testing.expect(visible(&base, null, 8.0, &m));
+    try std.testing.expect(visible(&group1, null, 8.0, &m));
+    try std.testing.expect(!visible(&ordinary, null, 8.0, &m));
+}
+
+test "scaminVisible follows physical display size_scale" {
+    // Halving the physical pixel pitch doubles pixels/mm, which shifts the same
+    // SCAMIN crossing one Web-Mercator zoom level finer.
+    const s: ?i64 = 60000;
+    const z_ref = std.math.log2(DENOM_Z0 / 60000.0);
+    try std.testing.expect(scaminVisible(s, z_ref + 0.01, 1.0));
+    try std.testing.expect(!scaminVisible(s, z_ref + 0.01, 2.0));
+    try std.testing.expect(scaminVisible(s, z_ref + 1.01, 2.0));
 }
 
 test "osclVisible: the X2 hatch never fires at/below 1x, fires past 2x" {
@@ -364,15 +397,15 @@ test "osclVisible: the X2 hatch never fires at/below 1x, fires past 2x" {
     const z_1x = std.math.log2(DENOM_Z0 / @as(f64, @floatFromInt(cscl))); // denom == cscl
     const z_2x = std.math.log2(DENOM_Z0 / @as(f64, @floatFromInt(oscl))); // denom == cscl/2
     // At and below 1x: no hatch (the "no hatch at/below 1x cscl" pin).
-    try std.testing.expect(!osclVisible(oscl, z_1x - 0.5));
-    try std.testing.expect(!osclVisible(oscl, z_1x));
+    try std.testing.expect(!osclVisible(oscl, z_1x - 0.5, 1.0));
+    try std.testing.expect(!osclVisible(oscl, z_1x, 1.0));
     // Between 1x and 2x: still no hatch (not yet grossly overscale, §10.1.10.2).
-    try std.testing.expect(!osclVisible(oscl, (z_1x + z_2x) / 2.0));
+    try std.testing.expect(!osclVisible(oscl, (z_1x + z_2x) / 2.0, 1.0));
     // Exactly at 2x: strict `>` -> off; just past 2x: on.
-    try std.testing.expect(!osclVisible(oscl, z_2x));
-    try std.testing.expect(osclVisible(oscl, z_2x + 0.5));
+    try std.testing.expect(!osclVisible(oscl, z_2x, 1.0));
+    try std.testing.expect(osclVisible(oscl, z_2x + 0.5, 1.0));
     // Unknown scale never hatches.
-    try std.testing.expect(!osclVisible(0, 16.0));
+    try std.testing.expect(!osclVisible(0, 16.0, 1.0));
 }
 
 test "visible: the overscale hatch honours show_overscale + the oscl gate" {
@@ -398,14 +431,6 @@ test "viewingGroupVisible: deny-list, vg 0 always shows" {
     try std.testing.expect(!viewingGroupVisible(21030, &off));
     try std.testing.expect(viewingGroupVisible(27010, &off));
     try std.testing.expect(viewingGroupVisible(21030, null)); // no list -> all on
-}
-
-test "dense soundings bypass SCAMIN only for SOUNDG" {
-    const snd = rs.FeatureMeta{ .display_category = 2, .vg = 0, .scamin = 60000, .class = "SOUNDG" };
-    const buoy = rs.FeatureMeta{ .display_category = 1, .vg = 0, .scamin = 60000, .class = "BOYLAT" };
-    const m = Settings{ .display_other = true, .dense_soundings = true };
-    try std.testing.expect(visible(&snd, null, 10.0, &m));
-    try std.testing.expect(!visible(&buoy, "BOYLAT01", 10.0, &m));
 }
 
 test "visible combines gates + honours ignore_scamin" {
