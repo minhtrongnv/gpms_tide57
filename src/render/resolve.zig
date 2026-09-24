@@ -387,7 +387,7 @@ test "osclVisible: the X2 hatch never fires at/below 1x, fires past 2x" {
     try std.testing.expect(!osclVisible(oscl, z_1x - 0.5, 1.0));
     try std.testing.expect(!osclVisible(oscl, z_1x, 1.0));
     // Between 1x and 2x: still no hatch (not yet grossly overscale, §10.1.10.2).
-    try std.testing.expect(!osclVisible(oscl, (z_1x + z_2x, 1.0) / 2.0));
+    try std.testing.expect(!osclVisible(oscl, (z_1x + z_2x) / 2.0, 1.0));
     // Exactly at 2x: strict `>` -> off; just past 2x: on.
     try std.testing.expect(!osclVisible(oscl, z_2x, 1.0));
     try std.testing.expect(osclVisible(oscl, z_2x + 0.5, 1.0));
