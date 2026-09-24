@@ -55,8 +55,10 @@ pub const Settings = struct {
     // low-priority clutter with them. `null` = follow the display category, as before.
     show_soundings: ?bool = null,
 
-    // Host opt-in for the legacy/demo sounding density: ignore SCAMIN only for
-    // spot SOUNDG marks while keeping every other feature scale-gated normally.
+    // Host opt-in for the older/demo sounding density. Spot SOUNDG keeps SCAMIN,
+    // but its effective cutoff is relaxed only to the source cell's navigational
+    // band floor (the pre-density-fix behavior), so detail appears progressively
+    // with zoom instead of turning into an all-scales sounding carpet.
     // Default false preserves the current S-52/NOAA density behaviour.
     dense_soundings: bool = false,
 
