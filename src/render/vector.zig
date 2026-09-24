@@ -997,7 +997,7 @@ pub const VectorSurface = struct {
         // deeper than it is: the survivors pack the screen, and zooming out never
         // thins them. Gate before the pool sees it, not after.
         self.dbg_seen += 1;
-        if (!self.settings.ignore_scamin and !resolve.scaminVisible(c.scamin, self.view_zoom)) {
+        if (!self.settings.ignore_scamin and !resolve.scaminVisible(c.scamin, self.view_zoom, self.settings.size_scale)) {
             self.dbg_scamin += 1;
             return;
         }
