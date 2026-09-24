@@ -726,6 +726,14 @@ pub fn commonChartFilters(a: std.mem.Allocator, m: *const Settings, enabled_band
 }
 
 
+fn stringifyTestValue(a: std.mem.Allocator, value: Value) ![]u8 {
+    var aw: std.Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    var stringify: std.json.Stringify = .{ .writer = &aw.writer };
+    try stringify.write(value);
+    return aw.toOwnedSlice();
+}
+
 test "categoryFilter keeps the spot-soundings switch independent of OTHER" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -739,7 +747,7 @@ test "categoryFilter keeps the spot-soundings switch independent of OTHER" {
         .show_soundings = true,
     };
     const on = try categoryFilter(b, &m);
-    const on_json = try std.json.Stringify.valueAlloc(a, on, .{});
+    const on_json = try stringifyTestValue(a, on);
     try std.testing.expect(std.mem.indexOf(
         u8,
         on_json,
@@ -749,7 +757,7 @@ test "categoryFilter keeps the spot-soundings switch independent of OTHER" {
     m.display_other = true;
     m.show_soundings = false;
     const off = try categoryFilter(b, &m);
-    const off_json = try std.json.Stringify.valueAlloc(a, off, .{});
+    const off_json = try stringifyTestValue(a, off);
     try std.testing.expect(std.mem.indexOf(
         u8,
         off_json,
@@ -758,7 +766,7 @@ test "categoryFilter keeps the spot-soundings switch independent of OTHER" {
 
     m.show_soundings = null;
     const legacy = try categoryFilter(b, &m);
-    const legacy_json = try std.json.Stringify.valueAlloc(a, legacy, .{});
+    const legacy_json = try stringifyTestValue(a, legacy);
     // Follow-category mode needs no SOUNDG-specific category exception.
     try std.testing.expect(std.mem.indexOf(u8, legacy_json, "\"SOUNDG\"") == null);
 }
