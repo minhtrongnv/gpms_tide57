@@ -1428,7 +1428,7 @@ test {
     _ = raster;
 }
 
-test "composeTile carries per-feature SCAMIN through the seam clip + re-encode" {
+test "composeTile carries SCAMIN and precomputed vz through seam clip + re-encode" {
     const gpa = std.testing.allocator;
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
@@ -1455,10 +1455,12 @@ test "composeTile carries per-feature SCAMIN through the seam clip + re-encode" 
     const west_props = [_]mvt.Prop{
         .{ .key = "class", .value = .{ .string = "BOYLAT" } },
         .{ .key = "scamin", .value = .{ .int = 22_000 } },
+        .{ .key = "vz", .value = .{ .float = 11.25 } },
     };
     const east_props = [_]mvt.Prop{
         .{ .key = "class", .value = .{ .string = "BCNLAT" } },
         .{ .key = "scamin", .value = .{ .int = 45_000 } },
+        .{ .key = "vz", .value = .{ .float = 12.5 } },
     };
     const west_feat = [_]mvt.Feature{.{ .geom_type = .point, .parts = &west_parts, .properties = &west_props }};
     const east_feat = [_]mvt.Feature{.{ .geom_type = .point, .parts = &east_parts, .properties = &east_props }};
@@ -1510,11 +1512,14 @@ test "composeTile carries per-feature SCAMIN through the seam clip + re-encode" 
         for (layer.features) |f| {
             try std.testing.expect(f.parts.len == 1 and f.parts[0].len == 1);
             const sc = propInt(f.properties, "scamin") orelse return error.ScaminDropped;
+            const vz = propNum(f.properties, "vz") orelse return error.VzDropped;
             if (f.parts[0][0].x == 1000) {
                 try std.testing.expectEqual(@as(i64, 22_000), sc);
+                try std.testing.expectApproxEqAbs(@as(f64, 11.25), vz, 0.0001);
                 seen_west = true;
             } else if (f.parts[0][0].x == 3000) {
                 try std.testing.expectEqual(@as(i64, 45_000), sc);
+                try std.testing.expectApproxEqAbs(@as(f64, 12.5), vz, 0.0001);
                 seen_east = true;
             }
         }
