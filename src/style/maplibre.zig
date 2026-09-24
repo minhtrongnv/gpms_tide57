@@ -370,6 +370,10 @@ const Bucket = struct {
     zoom_k: f64 = 0, // zoom_gate: the per-archive display-denominator constant K (scaminGateK)
     filter_gate: bool = false, // scamin-layers.md: the live client-driven SCAMIN clause (?scaminexact)
     cur_denom: f64 = 0, // filter_gate: the current-display-scale denominator literal (client-overwritten)
+    // Relax only the SCAMIN threshold for this layer. 1.0 = normal. Dense spot
+    // soundings use 4.0, i.e. admit two zoom levels earlier instead of disabling
+    // SCAMIN entirely. This keeps detail growth progressive as the user zooms.
+    scamin_factor: f64 = 1.0,
     suffix: []const u8 = "", // id suffix: "#oscl" (overscaled fill pass) / "" (plain)
     // Overscale (oscl) clause role (S-52 §10.1.10) — see OverscaleRole.
     oscl: OverscaleRole = .none,
@@ -394,6 +398,14 @@ fn bucketWithOverscale(a: std.mem.Allocator, bkt: Bucket, role: OverscaleRole) !
     return b;
 }
 
+const DENSE_SOUNDING_SCAMIN_FACTOR: f64 = 4.0; // two zoom levels earlier: log2(4) = 2
+
+fn denseSoundingBucket(bkt: Bucket) Bucket {
+    var b = bkt;
+    b.scamin_factor = DENSE_SOUNDING_SCAMIN_FACTOR;
+    return b;
+}
+
 // coalesce fallback for a feature with no `scamin`: a denominator larger than any real
 // display scale, so `scamin >= curDenom` is always true (missing SCAMIN => always shown).
 const SCAMIN_COALESCE_MAX = 1000000000000; // 1e12
@@ -403,52 +415,72 @@ const SCAMIN_COALESCE_MAX = 1000000000000; // 1e12
 // non-SCAMIN feature coalesces to 1e12 (>= any denominator) and always passes.
 fn writeScaminClause(js: *Stringify, bkt: Bucket) !void {
     if (bkt.filter_gate) {
-        // scamin-layers.md: [">=", ["coalesce", ["get","scamin"], 1e12], curDenom].
-        // The live client rewrites curDenom via setFilter at the discrete SCAMIN boundary
-        // crossings; the emitted literal is the standalone default (0 => show all).
+        // Normal exact gate: scamin >= curDenom.
+        // Dense SOUNDG: scamin * 4 >= curDenom. The host can still rewrite
+        // the RHS denominator literal with the same exact-gate machinery.
         try js.beginArray();
         try js.write(">=");
-        try js.beginArray();
-        try js.write("coalesce");
-        try js.write(.{ "get", "scamin" });
-        try js.write(SCAMIN_COALESCE_MAX);
-        try js.endArray();
+        if (bkt.scamin_factor == 1.0) {
+            try js.beginArray();
+            try js.write("coalesce");
+            try js.write(.{ "get", "scamin" });
+            try js.write(SCAMIN_COALESCE_MAX);
+            try js.endArray();
+        } else {
+            try js.beginArray();
+            try js.write("*");
+            try js.beginArray();
+            try js.write("coalesce");
+            try js.write(.{ "get", "scamin" });
+            try js.write(SCAMIN_COALESCE_MAX);
+            try js.endArray();
+            try js.write(bkt.scamin_factor);
+            try js.endArray();
+        }
         try js.write(bkt.cur_denom);
         try js.endArray();
         return;
     }
-    // zoom_gate (the only other clause-bearing mode; has_clause guarantees it):
-    // tile57/3 bakes the fractional admission zoom into `vz`, so current
-    // archives stay on the cheap get+compare path. Older tile57/2 archives
-    // carry only raw `scamin`; using a literal 0 fallback for missing `vz`
-    // made EVERY SCAMIN'd feature visible at every zoom when a live compositor
-    // was opened over a stale cache. That is exactly the "all symbols at
-    // overview scale" failure mode.
-    //
-    // Coalesce lazily falls back to the old mathematically-equivalent gate only
-    // when `vz` is absent:
-    //
-    //   vz = log2(K / scamin)
-    //   show when vz <= zoom
-    //
-    // Missing SCAMIN coalesces to a huge denominator, yielding a negative
-    // admission zoom and therefore remaining always-visible as before.
-    try js.write(.{
-        "<=",
-        .{
-            "coalesce",
-            .{ "get", "vz" },
+
+    // Merged zoom gate. vz is the normal admission zoom. A 4x SCAMIN
+    // factor admits the sounding two zoom levels earlier, but finer-cell
+    // soundings remain gated until the viewer is close enough.
+    const zoom_lead = @log2(bkt.scamin_factor);
+    if (zoom_lead == 0.0) {
+        try js.write(.{
+            "<=",
             .{
-                "log2",
+                "coalesce",
+                .{ "get", "vz" },
                 .{
-                    "/",
-                    bkt.zoom_k,
-                    .{ "coalesce", .{ "get", "scamin" }, SCAMIN_COALESCE_MAX },
+                    "log2",
+                    .{
+                        "/",
+                        bkt.zoom_k,
+                        .{ "coalesce", .{ "get", "scamin" }, SCAMIN_COALESCE_MAX },
+                    },
                 },
             },
-        },
-        .{"zoom"},
-    });
+            .{"zoom"},
+        });
+    } else {
+        try js.write(.{
+            "<=",
+            .{
+                "coalesce",
+                .{ "get", "vz" },
+                .{
+                    "log2",
+                    .{
+                        "/",
+                        bkt.zoom_k,
+                        .{ "coalesce", .{ "get", "scamin" }, SCAMIN_COALESCE_MAX },
+                    },
+                },
+            },
+            .{ "+", .{"zoom"}, zoom_lead },
+        });
+    }
 }
 
 // Write a layer's `filter`. The filter ANDs together (in order): the `base` predicate
@@ -1166,10 +1198,11 @@ pub fn json(alloc: std.mem.Allocator, opts: Options) ![]u8 {
         for (scamin_buckets) |bkt| try pointSymbolLayers(js, &s, "point_symbols", bkt, .base);
         for (scamin_buckets) |bkt| {
             var sbuf: [96]u8 = undefined;
-            // The hosted demo was baked before spot-sounding SCAMIN density was
-            // tightened, so an opt-in dense mode reproduces that useful "more
-            // depth numbers" view without disabling SCAMIN for buoys/lights/text.
-            const sbkt: Bucket = if (m.dense_soundings) .{} else bkt;
+            // Dense mode is progressive, not "show everything": relax SOUNDG
+            // SCAMIN by two zoom levels (4x denominator) and then let the browser
+            // collision-thin only the extra spot depths. Finer-cell soundings
+            // therefore appear gradually as the user zooms in.
+            const sbkt: Bucket = if (m.dense_soundings) denseSoundingBucket(bkt) else bkt;
             try soundingsLayer(js, &s, sbkt, try std.fmt.bufPrint(&sbuf, "soundings{s}", .{sbkt.suffix}), FILT_SPOT_SND, true);
         }
         // Over-soundings pass: high-priority symbols + the danger deviation (see PointMode).
