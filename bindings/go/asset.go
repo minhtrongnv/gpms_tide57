@@ -92,6 +92,32 @@ func BakeMapLibreSprite(
 		nil
 }
 
+
+const (
+	MapLibreFontRegular int32 = 0
+	MapLibreFontBold    int32 = 1
+	MapLibreFontItalic  int32 = 2
+)
+
+// MapLibreGlyphPBF returns one 256-codepoint MapLibre glyph-PBF range from one
+// of libtile57's embedded Noto Sans label faces. rangeStart must be aligned to
+// 256 (0, 256, 512, ...).
+func MapLibreGlyphPBF(face int32, rangeStart uint32) ([]byte, error) {
+	var out *C.uint8_t
+	var n C.size_t
+	var cerr C.tile57_error
+	if st := C.tile57_maplibre_glyph_pbf(
+		C.int32_t(face),
+		C.uint32_t(rangeStart),
+		&out,
+		&n,
+		&cerr,
+	); st != C.TILE57_OK {
+		return nil, statusError(st, &cerr)
+	}
+	return tileBytes(out, n), nil
+}
+
 // copyBytes copies a libtile57-owned (uint8_t*, size_t) buffer into Go memory
 // WITHOUT freeing it (the whole tile57_assets is freed at once by
 // tile57_assets_free). (nil for an empty/NULL buffer.)
