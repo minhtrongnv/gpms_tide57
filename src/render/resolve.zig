@@ -400,6 +400,45 @@ test "viewingGroupVisible: deny-list, vg 0 always shows" {
 }
 
 
+test "detail levels gate base standard and other independently" {
+    const base = rs.FeatureMeta{ .display_category = 0, .class = "LNDARE" };
+    const standard = rs.FeatureMeta{ .display_category = 1, .class = "BOYLAT" };
+    const other = rs.FeatureMeta{ .display_category = 2, .class = "CBLSUB" };
+
+    const m_base = Settings{ .display_base = true, .display_standard = false, .display_other = false };
+    try std.testing.expect(visible(&base, null, 18.0, &m_base));
+    try std.testing.expect(!visible(&standard, null, 18.0, &m_base));
+    try std.testing.expect(!visible(&other, null, 18.0, &m_base));
+
+    const m_standard = Settings{ .display_base = true, .display_standard = true, .display_other = false };
+    try std.testing.expect(visible(&base, null, 18.0, &m_standard));
+    try std.testing.expect(visible(&standard, null, 18.0, &m_standard));
+    try std.testing.expect(!visible(&other, null, 18.0, &m_standard));
+
+    const m_other = Settings{ .display_base = true, .display_standard = true, .display_other = true };
+    try std.testing.expect(visible(&other, null, 18.0, &m_other));
+}
+
+test "spot soundings stay independently switchable but still obey SCAMIN" {
+    const snd = rs.FeatureMeta{
+        .display_category = 2,
+        .scamin = 60000,
+        .class = "SOUNDG",
+    };
+    const m = Settings{
+        .display_base = true,
+        .display_standard = true,
+        .display_other = false,
+        .show_soundings = true,
+    };
+
+    // Independent switch admits SOUNDG despite OTHER being off...
+    try std.testing.expect(categoryVisible(snd.display_category, snd.class, null, &m));
+    // ...but scale gating still controls when the sounding is actually visible.
+    try std.testing.expect(!visible(&snd, null, 10.0, &m));
+    try std.testing.expect(visible(&snd, null, 13.0, &m));
+}
+
 test "visible combines gates + honours ignore_scamin" {
     const m = Settings{};
     const meta = rs.FeatureMeta{ .display_category = 1, .vg = 0, .scamin = 30000, .class = "BOYLAT" };
