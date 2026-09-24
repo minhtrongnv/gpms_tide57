@@ -135,6 +135,31 @@ const FILT_DOTTED = .{ "==", .{ "get", "dash" }, "dotted" };
 const MLN_BAKE_SCALE: f64 = 0.02834627777338028;
 const ICON_SIZE = .{ "/", .{ "coalesce", .{ "get", "scale" }, 0.08 }, MLN_BAKE_SCALE };
 
+// Point-symbol size must follow display scale as the camera zooms. The catalogue
+// "scale" property and host size_scale still preserve the symbol's relative
+// S-52 size + monitor calibration; this extra factor only adapts that physical
+// size to the current map scale.
+//
+// z5  (~overview, multi-million denominator) -> compact symbols
+// z8  (~general/coastal)                    -> ~55%
+// z10 (~coastal/approach)                   -> ~70%
+// z12 (~approach/harbour)                   -> ~85%
+// z14+                                      -> full catalogue size
+//
+// Exponential interpolation keeps zoom transitions smooth instead of visibly
+// "popping" at integer zoom boundaries.
+const ICON_ZOOM_SCALE = .{
+    "interpolate",
+    .{ "exponential", 1.15 },
+    .{"zoom"},
+    5, 0.40,
+    8, 0.55,
+    10, 0.70,
+    12, 0.85,
+    14, 1.0,
+};
+const SCALED_ICON_SIZE = .{ "*", ICON_SIZE, ICON_ZOOM_SCALE };
+
 const VROW = .{ "match", .{ "coalesce", .{ "get", "valign" }, "middle" }, "top", "top", "bottom", "bottom", "center" };
 const TEXT_ANCHOR = .{
     "match",         .{ "concat", VROW, "|", .{ "coalesce", .{ "get", "halign" }, "center" } },
@@ -513,7 +538,7 @@ fn pointLayout(js: *Stringify, alignment: []const u8, icon: std.json.Value, scal
     try js.objectField("icon-image");
     try js.write(icon);
     try js.objectField("icon-size");
-    try writeScaled(js, ICON_SIZE, scale);
+    try writeScaled(js, SCALED_ICON_SIZE, scale);
     try js.objectField("icon-rotate");
     try js.write(.{ "coalesce", .{ "get", "rotation_deg" }, 0 });
     try js.objectField("icon-allow-overlap");
@@ -951,7 +976,7 @@ fn soundingsLayer(js: *Stringify, s: *const SCtx, bkt: Bucket, id: []const u8, f
     try js.objectField("icon-image");
     try js.write(s.sound_img);
     try js.objectField("icon-size");
-    try writeScaled(js, ICON_SIZE, s.size_scale);
+    try writeScaled(js, SCALED_ICON_SIZE, s.size_scale);
     try js.objectField("icon-allow-overlap");
     try js.write(true);
     try js.objectField("icon-ignore-placement");
@@ -1639,11 +1664,14 @@ test "json: size_scale wraps icon/line/text sizes in a multiplier" {
         .glyphs = "glyphs/{fontstack}/{range}.pbf",
     };
 
-    // Default scale 1.0: sizes written verbatim, no multiplier wrapper.
+    // Default scale 1.0: line/text sizes stay verbatim. Point/sounding icon-size
+    // intentionally carries the camera-zoom interpolation so overview symbols shrink.
     const def = try json(a, base);
     defer a.free(def);
     try std.testing.expect(std.mem.indexOf(u8, def, "\"line-width\":[\"coalesce\",[\"get\",\"width_px\"],1]") != null);
     try std.testing.expect(std.mem.indexOf(u8, def, "\"line-width\":[\"*\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, def, "\"icon-size\":[\"*\",[\"/\",[\"coalesce\",[\"get\",\"scale\"],0.08]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, def, "\"interpolate\",[\"exponential\",1.15],[\"zoom\"],5,0.4,8,0.55,10,0.7,12,0.85,14,1") != null);
 
     // Scaled: icon-size / line-width / text-size each wrap in ["*", scale, expr].
     var scaled = base;
