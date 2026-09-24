@@ -219,8 +219,7 @@ pub fn textGroupVisible(group: i64, m: *const Settings) bool {
 pub fn visible(meta: *const rs.FeatureMeta, symbol_name: ?[]const u8, zoom: f64, m: *const Settings) bool {
     if (!categoryVisible(meta.display_category, meta.class, symbol_name, m)) return false;
     if (!viewingGroupVisible(meta.vg, m.viewing_groups_off)) return false;
-    const dense_spot_sounding = m.dense_soundings and std.mem.eql(u8, meta.class, "SOUNDG");
-    if (!m.ignore_scamin and !dense_spot_sounding and !scaminVisible(meta.scamin, zoom)) return false;
+    if (!m.ignore_scamin and !scaminVisible(meta.scamin, zoom)) return false;
     // The AP(OVERSC01) overscale hatch (S-52 §10.1.10): the mariner toggle, plus
     // the oscl scale gate. Hidden under ignore_scamin (the debug toggle drops all
     // scale gating — an always-on hatch would bury the debug view), mirroring the
@@ -398,14 +397,6 @@ test "viewingGroupVisible: deny-list, vg 0 always shows" {
     try std.testing.expect(!viewingGroupVisible(21030, &off));
     try std.testing.expect(viewingGroupVisible(27010, &off));
     try std.testing.expect(viewingGroupVisible(21030, null)); // no list -> all on
-}
-
-test "dense soundings bypass SCAMIN only for SOUNDG" {
-    const snd = rs.FeatureMeta{ .display_category = 2, .vg = 0, .scamin = 60000, .class = "SOUNDG" };
-    const buoy = rs.FeatureMeta{ .display_category = 1, .vg = 0, .scamin = 60000, .class = "BOYLAT" };
-    const m = Settings{ .display_other = true, .dense_soundings = true };
-    try std.testing.expect(visible(&snd, null, 10.0, &m));
-    try std.testing.expect(!visible(&buoy, "BOYLAT01", 10.0, &m));
 }
 
 test "visible combines gates + honours ignore_scamin" {
