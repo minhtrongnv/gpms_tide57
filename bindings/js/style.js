@@ -28,7 +28,7 @@
  * @property {boolean} display_standard       Show "standard" category.
  * @property {boolean} display_other          Show "other" category.
  * @property {boolean|null} show_soundings     Spot soundings override; null follows OTHER.
- * @property {boolean} dense_soundings      Ignore SCAMIN only for spot SOUNDG (legacy/demo density).
+ * @property {boolean} dense_soundings      Relax spot SOUNDG to its source-band floor (legacy/demo progressive density).
  * @property {boolean} data_quality           M_QUAL data-quality overlay.
  * @property {boolean} show_inform_callouts   INFORM01 callouts.
  * @property {boolean} show_meta_bounds       Meta coverage/scale bounds.
