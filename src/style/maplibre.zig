@@ -44,10 +44,10 @@ const TEXT_FONT = .{
 // the uncalibrated CSS pixel; K is latitude-corrected and calibrated. See
 // scaminGateK() / writeScaminClause's .zoom_gate branch.
 
-// Physical-scale constants from the web client (web/src/lib/util.mjs), so an engine
-// SCAMIN bucket's native minzoom MATCHES the JS client's scaminDisplayZoom (the §7
-// render-parity gate). The client DISPLAY cutoff uses the calibrated 0.2645 mm CSS
-// pixel (NOT the 0.28 mm OGC pixel the bake floor / Go scaminZoom use, ≈279.5M).
+// Physical-scale constants from the web client (web/src/lib/util.mjs). Baked `vz`
+// uses the 0.2645 mm CSS reference pitch, while the live style shifts that admission
+// zoom by log2(size_scale) so a manually calibrated screen follows the same physical
+// 1:N cutoff OpenCPN derives from pixels/mm.
 const M_PER_PX_Z0 = 78271.516964020485; // metres / CSS-px at z0, equator (512-tile)
 const DEFAULT_PX_PITCH_MM = 0.2645; // calibrated CSS-pixel pitch (NOT the OGC 0.28 mm)
 
@@ -62,10 +62,8 @@ pub fn scaminDisplayZoom(scamin: f64, lat: f64) f64 {
     return std.math.clamp(z, 0, 24);
 }
 
-/// The per-archive display-denominator constant K such that the on-screen 1:N
-/// denominator at Web-Mercator `zoom` is K / 2^zoom (== displayDenom). Baked into the
-/// static SCAMIN/oscl gate at the archive-center latitude; the SAME constant the
-/// bucket path computes (json). Replaces the old equator-only OGC DENOM_Z0.
+/// Reference-display denominator constant K (0.2645 mm/CSS px). The live merged
+/// style multiplies this by size_scale = reference_pitch / actual_pitch.
 pub fn scaminGateK(lat: f64) f64 {
     return M_PER_PX_Z0 * @cos(lat * std.math.pi / 180.0) / (DEFAULT_PX_PITCH_MM / 1000.0);
 }
@@ -83,6 +81,15 @@ fn scaminGateKForSize(lat: f64, size_scale: f64) f64 {
 
 fn scaminZoomShift(size_scale: f64) f64 {
     return std.math.log2(physicalScaleMultiplier(size_scale));
+}
+
+test "physical screen size shifts merged SCAMIN at the same 1:N scale" {
+    const lat = 38.9;
+    const ref_k = scaminGateKForSize(lat, 1.0);
+    const half_pitch = scaminGateKForSize(lat, 2.0);
+    try std.testing.expectApproxEqRel(ref_k * 2.0, half_pitch, 1e-12);
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), scaminZoomShift(2.0), 1e-12);
+    try std.testing.expectApproxEqAbs(@as(f64, -1.0), scaminZoomShift(0.5), 1e-12);
 }
 
 test "scaminGateK: K/2^zoom equals displayDenom (one gate constant)" {
