@@ -32,7 +32,6 @@ const cv = @import("canvas.zig");
 const paint = @import("paint.zig");
 const fontmod = @import("font.zig");
 const dc = @import("declutter.zig");
-const tband = @import("tiles").band;
 const tile = @import("tiles").tile;
 
 /// What a range draws — the host picks a pipeline from this, nothing more. It is
@@ -941,72 +940,15 @@ pub const GpuSurface = struct {
         }
         const quads = try self.a.alloc(SpriteQuad, 1);
         quads[0] = q;
-        // A non-base point symbol displayed BELOW its usage band's window is a
-        // fill-down sprite on ground S-52 would never draw it on: it becomes a
-        // collision CANDIDATE (dc.Pool.addSymbol) instead of unconditional
-        // geometry, so dense overscaled clutter resolves to its top-priority
-        // representatives while an uncontested symbol still always draws. At
-        // native zooms — the display the spec governs — every symbol is pushed
-        // unconditionally, exactly as before.
-        if (kind == .symbol and self.cur.display_category != 0 and belowBandWindow(self.cur.band, self.zoom)) {
-            const op = Op{
-                .paint_key = paint.key(kind, self.cur.display_priority, self.cur.display_plane, self.settings.imageBeneath()),
-                .seq = 0,
-                .kind = kind,
-                .color = .{ 255, 255, 255, 255 },
-                .scamin = if (self.cur.scamin) |sc| @floatFromInt(sc) else 0,
-                .disp_cat = @intCast(std.math.clamp(self.cur.display_category, 0, 2)),
-                .map_align = if (rot_north) 1 else 0,
-                .tox = self.tile_ox,
-                .toy = self.tile_oy,
-                .tscale = self.tile_scale,
-                .geom = .{ .sprite = .{ .anchor = at, .quads = quads, .atlas = .sprite } },
-            };
-            var cq = std.ArrayList(Quad).empty;
-            try self.emitSpriteGeom(self.a, &cq, op, at, quads, 0);
-            var bx0: f32 = std.math.floatMax(f32);
-            var by0: f32 = std.math.floatMax(f32);
-            var bx1: f32 = -std.math.floatMax(f32);
-            var by1: f32 = -std.math.floatMax(f32);
-            for (q.corners) |corner| {
-                bx0 = @min(bx0, corner[0]);
-                by0 = @min(by0, corner[1]);
-                bx1 = @max(bx1, corner[0]);
-                by1 = @max(by1, corner[1]);
-            }
-            const aw = opWorld(op, at);
-            try self.candidates.append(self.a, .{
-                .quads = try cq.toOwnedSlice(self.a),
-                .ax = aw[0],
-                .ay = aw[1],
-                .bx0 = bx0,
-                .by0 = by0,
-                .bx1 = bx1,
-                .by1 = by1,
-                .scamin = op.scamin,
-                .disp_cat = op.disp_cat,
-                .color = op.color,
-                .group = 0,
-                .paint_key = op.paint_key,
-                .cls = self.cur.class,
-                .text = "",
-                .atlas = .sprite,
-                .is_symbol = true,
-                .sym_priority = @intCast(std.math.clamp(self.cur.display_priority, 0, 9)),
-            });
-            return;
-        }
+        // OpenCPN does not apply a navigational-band density cliff to point
+        // symbols. Chart admission/quilting decides which ENC cell participates,
+        // then the object's normal Display Category + SCAMIN gates decide whether
+        // the symbol is visible. Do not turn below-band symbols into a collision
+        // pool candidate: that made buoy/beacon/light detail suddenly appear only
+        // after crossing a hard Web-Mercator band floor (for example z11).
         // Sprites carry their own colour, so the range colour is a placeholder.
         try self.push(kind, .{ 255, 255, 255, 255 }, .{ .sprite = .{ .anchor = at, .quads = quads, .atlas = .sprite } });
         if (rot_north) self.ops.items[self.ops.items.len - 1].map_align = 1;
-    }
-
-    /// Whether zoom sits below `band`'s native window — the fill-down regime.
-    /// A band value past .overview (a foreign producer) never pools.
-    fn belowBandWindow(b: u8, zoom: f64) bool {
-        if (b > @intFromEnum(tband.Band.overview)) return false;
-        const floor: f64 = @floatFromInt(tband.bandZooms(@enumFromInt(b)).min);
-        return zoom < floor;
     }
 
     /// A label: shaped into outline rings now, admitted only if it wins its space.
