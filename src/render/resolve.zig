@@ -219,7 +219,8 @@ pub fn textGroupVisible(group: i64, m: *const Settings) bool {
 pub fn visible(meta: *const rs.FeatureMeta, symbol_name: ?[]const u8, zoom: f64, m: *const Settings) bool {
     if (!categoryVisible(meta.display_category, meta.class, symbol_name, m)) return false;
     if (!viewingGroupVisible(meta.vg, m.viewing_groups_off)) return false;
-    if (!m.ignore_scamin and !scaminVisible(meta.scamin, zoom, m.size_scale)) return false;
+    const scamin_exempt = meta.display_category == 0 or meta.display_priority == 1;
+    if (!m.ignore_scamin and !scamin_exempt and !scaminVisible(meta.scamin, zoom, m.size_scale)) return false;
     // The AP(OVERSC01) overscale hatch (S-52 §10.1.10): the mariner toggle, plus
     // the oscl scale gate. Hidden under ignore_scamin (the debug toggle drops all
     // scale gating — an always-on hatch would bury the debug view), mirroring the
@@ -351,6 +352,16 @@ test "scaminVisible mirrors the style SCAMIN_GATE" {
     try std.testing.expect(scaminVisible(30000, 13.3, 1.0));
     try std.testing.expect(scaminVisible(null, 0, 1.0)); // no SCAMIN -> always
     try std.testing.expect(scaminVisible(0, 0, 1.0)); // degenerate 0 -> always
+}
+
+test "visible ignores SCAMIN for Display Base and Group 1 like OpenCPN" {
+    const m = Settings{};
+    const base = rs.FeatureMeta{ .display_category = 0, .display_priority = 5, .scamin = 1000, .class = "LNDARE" };
+    const group1 = rs.FeatureMeta{ .display_category = 1, .display_priority = 1, .scamin = 1000, .class = "DEPARE" };
+    const ordinary = rs.FeatureMeta{ .display_category = 1, .display_priority = 5, .scamin = 1000, .class = "BOYLAT" };
+    try std.testing.expect(visible(&base, null, 8.0, &m));
+    try std.testing.expect(visible(&group1, null, 8.0, &m));
+    try std.testing.expect(!visible(&ordinary, null, 8.0, &m));
 }
 
 test "scaminVisible follows physical display size_scale" {
