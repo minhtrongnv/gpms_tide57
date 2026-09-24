@@ -184,9 +184,10 @@ pub fn scaminVisible(scamin: ?i64, zoom: f64, size_scale: f64) bool {
 /// (bake_enc.overscaleGateDenom = cscl/OVERSCALE_FACTOR), so this fires from X2 and
 /// NEVER before 1x compilation scale. The style clause is a strict `>` (oscl >
 /// DENOM); oscl 0 (unknown) never shows. Mirrors style/maplibre.zig writeOsclClause.
-pub fn osclVisible(oscl: i64, zoom: f64) bool {
+pub fn osclVisible(oscl: i64, zoom: f64, size_scale: f64) bool {
     if (oscl <= 0) return false;
-    return zoom > std.math.log2(DENOM_Z0 / @as(f64, @floatFromInt(oscl)));
+    const k = DENOM_Z0 * (if (size_scale > 0) size_scale else 1.0);
+    return zoom > std.math.log2(k / @as(f64, @floatFromInt(oscl)));
 }
 
 /// Viewing-group gate (S-52 §14.5) — the deny-list model of
@@ -225,7 +226,7 @@ pub fn visible(meta: *const rs.FeatureMeta, symbol_name: ?[]const u8, zoom: f64,
     // style builder, which omits the overscale layer entirely there.
     if (meta.overscale) {
         if (!m.show_overscale or m.ignore_scamin) return false;
-        if (!osclVisible(meta.oscl, zoom)) return false;
+        if (!osclVisible(meta.oscl, zoom, m.size_scale)) return false;
     }
     // S-52 display-variant passes (mirrors mariner.boundaryFilter /
     // pointStyleFilter): a feature portrayed twice carries bnd 1/0 (symbolized/
@@ -345,9 +346,9 @@ test "categoryVisible mirrors mariner.categoryFilter" {
 }
 
 test "scaminVisible mirrors the style SCAMIN_GATE" {
-    // 1:30000 gates at log2(279541132/30000) ~= 13.186.
-    try std.testing.expect(!scaminVisible(30000, 13.0, 1.0));
-    try std.testing.expect(scaminVisible(30000, 13.2, 1.0));
+    // 1:30000 gates at log2(295922559/30000) ~= 13.268 on the CSS-reference display.
+    try std.testing.expect(!scaminVisible(30000, 13.2, 1.0));
+    try std.testing.expect(scaminVisible(30000, 13.3, 1.0));
     try std.testing.expect(scaminVisible(null, 0, 1.0)); // no SCAMIN -> always
     try std.testing.expect(scaminVisible(0, 0, 1.0)); // degenerate 0 -> always
 }
@@ -372,15 +373,15 @@ test "osclVisible: the X2 hatch never fires at/below 1x, fires past 2x" {
     const z_1x = std.math.log2(DENOM_Z0 / @as(f64, @floatFromInt(cscl))); // denom == cscl
     const z_2x = std.math.log2(DENOM_Z0 / @as(f64, @floatFromInt(oscl))); // denom == cscl/2
     // At and below 1x: no hatch (the "no hatch at/below 1x cscl" pin).
-    try std.testing.expect(!osclVisible(oscl, z_1x - 0.5));
-    try std.testing.expect(!osclVisible(oscl, z_1x));
+    try std.testing.expect(!osclVisible(oscl, z_1x - 0.5, 1.0));
+    try std.testing.expect(!osclVisible(oscl, z_1x, 1.0));
     // Between 1x and 2x: still no hatch (not yet grossly overscale, §10.1.10.2).
-    try std.testing.expect(!osclVisible(oscl, (z_1x + z_2x) / 2.0));
+    try std.testing.expect(!osclVisible(oscl, (z_1x + z_2x, 1.0) / 2.0));
     // Exactly at 2x: strict `>` -> off; just past 2x: on.
-    try std.testing.expect(!osclVisible(oscl, z_2x));
-    try std.testing.expect(osclVisible(oscl, z_2x + 0.5));
+    try std.testing.expect(!osclVisible(oscl, z_2x, 1.0));
+    try std.testing.expect(osclVisible(oscl, z_2x + 0.5, 1.0));
     // Unknown scale never hatches.
-    try std.testing.expect(!osclVisible(0, 16.0));
+    try std.testing.expect(!osclVisible(0, 16.0, 1.0));
 }
 
 test "visible: the overscale hatch honours show_overscale + the oscl gate" {
