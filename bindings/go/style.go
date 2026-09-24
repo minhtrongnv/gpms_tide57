@@ -73,6 +73,7 @@ type Mariner struct {
 	SoundingSizeScale                                       float64 // extra multiplier for SOUNDINGS on top of SizeScale (0 reads as 1.0)
 	DeviceScale                                             float64 // device px per reference px: the HiDPI density the SURFACE paths are drawn at (0 reads as 1.0)
 	Soundings                                               SoundingsMode
+	DenseSoundings                                          bool    // ignore SCAMIN only for spot SOUNDG; legacy/demo high-density view
 	ViewingGroupsOff                                        []int32 // S-52 §14.5 DENY-LIST: vg ids turned OFF (nil/empty = show all)
 }
 
@@ -251,6 +252,7 @@ func (m Mariner) toC(arena *cArena) C.tile57_mariner {
 	c.sounding_size_scale = C.double(m.SoundingSizeScale)
 	c.device_scale = C.double(m.DeviceScale)
 	c.soundings = C.uint8_t(m.Soundings)
+	c.dense_soundings = C.bool(m.DenseSoundings)
 	// Viewing-group deny-list: arena-owned C array so no Go pointer crosses into C.
 	vgOffPtr, vgOffN := arena.int32Array(m.ViewingGroupsOff)
 	c.viewing_groups_off = vgOffPtr
@@ -291,6 +293,7 @@ func marinerFromC(c *C.tile57_mariner) Mariner {
 		SoundingSizeScale:          float64(c.sounding_size_scale),
 		DeviceScale:                float64(c.device_scale),
 		Soundings:                  SoundingsMode(c.soundings),
+		DenseSoundings:             bool(c.dense_soundings),
 	}
 	var dv []byte
 	for i := 0; i < len(c.date_view); i++ {
