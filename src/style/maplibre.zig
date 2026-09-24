@@ -134,18 +134,6 @@ const FILT_DOTTED = .{ "==", .{ "get", "dash" }, "dotted" };
 // engine SYMBOL_SCALE is the unit: a feature at that scale samples 1:1.
 const MLN_BAKE_SCALE: f64 = 0.02834627777338028;
 const ICON_SIZE = .{ "/", .{ "coalesce", .{ "get", "scale" }, 0.08 }, MLN_BAKE_SCALE };
-const DENSE_SOUNDING_PADDING = .{
-    "interpolate",
-    .{ "linear" },
-    .{ "zoom" },
-    9, 2,
-    10, 4,
-    11, 10,
-    12, 18,
-    13, 24,
-    14, 30,
-};
-
 
 const VROW = .{ "match", .{ "coalesce", .{ "get", "valign" }, "middle" }, "top", "top", "bottom", "bottom", "center" };
 const TEXT_ANCHOR = .{
@@ -288,10 +276,6 @@ const SCtx = struct {
     // Visibility, not a filter: a toggle is then a one-op visibility diff
     // instead of a whole-tile re-layout.
     soundings_on: bool,
-    // Dense mode exposes more SOUNDG than producer SCAMIN alone would. In the
-    // browser those extra spot depths are screen-space decluttered so zooming in
-    // does not turn the water into a wall of numbers.
-    dense_soundings: bool,
 };
 
 // Display-denominator gate value for the overscale clauses.
@@ -956,7 +940,7 @@ fn contourLabelLayer(js: *Stringify, s: *const SCtx, sl: []const u8, bkt: Bucket
 const FILT_SPOT_SND = .{ "==", .{ "coalesce", .{ "get", "class" }, "SOUNDG" }, "SOUNDG" };
 const FILT_DANGER_SND = .{ "!=", .{ "coalesce", .{ "get", "class" }, "SOUNDG" }, "SOUNDG" };
 
-fn soundingsLayer(js: *Stringify, s: *const SCtx, bkt: Bucket, id: []const u8, filt: anytype, comptime spot: bool) !void {
+fn soundingsLayer(js: *Stringify, s: *const SCtx, bkt: Bucket, id: []const u8, filt: anytype) !void {
     try js.beginObject();
     try layerHead(js, id, "symbol", "soundings");
     try applyBucket(js, filt, true, bkt, s, null); // soundings (band-quilted)
@@ -969,27 +953,10 @@ fn soundingsLayer(js: *Stringify, s: *const SCtx, bkt: Bucket, id: []const u8, f
     try js.objectField("icon-size");
     try writeScaled(js, ICON_SIZE, s.size_scale);
 
-    // Dense mode relaxes SCAMIN only for spot SOUNDG. Let MapLibre thin those
-    // extra spot-depth sprites in screen space so zoomed-in views remain readable.
-    // Normal soundings and all danger depths keep the existing always-draw behavior.
-    const declutter_spot = spot and s.dense_soundings;
     try js.objectField("icon-allow-overlap");
-    try js.write(!declutter_spot);
+    try js.write(true);
     try js.objectField("icon-ignore-placement");
-    try js.write(!declutter_spot);
-    if (declutter_spot) {
-        // Default MapLibre icon-padding is only 2 px, which is too small for the
-        // extra SOUNDG made eligible by dense mode. Increase screen-space spacing
-        // smoothly with zoom so ~1:200k stays detailed while ~1:100k does not
-        // collapse into a carpet of numbers.
-        try js.objectField("icon-padding");
-        try js.write(DENSE_SOUNDING_PADDING);
-
-        // When two spot depths compete for the same collision area, prefer the
-        // shallower one. Lower symbol-sort-key values place first in MapLibre.
-        try js.objectField("symbol-sort-key");
-        try js.write(.{ "coalesce", .{ "get", "depth" }, 1.0e9 });
-    }
+    try js.write(true);
     try js.endObject();
     try js.endObject();
 }
@@ -1084,7 +1051,6 @@ pub fn json(alloc: std.mem.Allocator, opts: Options) ![]u8 {
         .show_overscale = m.show_overscale,
         // A TEMPLATE (null mariner) keeps soundings visible; the client gates.
         .soundings_on = if (filters_on) (m.show_soundings orelse m.display_other) else true,
-        .dense_soundings = if (filters_on) m.dense_soundings else false,
     };
 
     var aw: std.Io.Writer.Allocating = .init(alloc);
@@ -1189,25 +1155,15 @@ pub fn json(alloc: std.mem.Allocator, opts: Options) ![]u8 {
     //   set per SCAMIN bucket rides each pass.
     if (sprite_on) {
         for (scamin_buckets) |bkt| try pointSymbolLayers(js, &s, "point_symbols", bkt, .base);
-        if (m.dense_soundings) {
-            // Dense mode intentionally removes the SCAMIN bucket gate for spot
-            // soundings. Emit ONE ungated layer. Emitting one ungated copy per
-            // SCAMIN bucket duplicates the same SOUNDG candidate pool many times,
-            // defeating collision thinning and creating the "wall of numbers"
-            // seen around ~1:95k.
-            try soundingsLayer(js, &s, .{}, "soundings", FILT_SPOT_SND, true);
-        } else {
-            for (scamin_buckets) |bkt| {
-                var sbuf: [96]u8 = undefined;
-                try soundingsLayer(
-                    js,
-                    &s,
-                    bkt,
-                    try std.fmt.bufPrint(&sbuf, "soundings{s}", .{bkt.suffix}),
-                    FILT_SPOT_SND,
-                    true,
-                );
-            }
+        for (scamin_buckets) |bkt| {
+            var sbuf: [96]u8 = undefined;
+            try soundingsLayer(
+                js,
+                &s,
+                bkt,
+                try std.fmt.bufPrint(&sbuf, "soundings{s}", .{bkt.suffix}),
+                FILT_SPOT_SND,
+            );
         }
         // Over-soundings pass: high-priority symbols + the danger deviation (see PointMode).
         for (scamin_buckets) |bkt| try pointSymbolLayers(js, &s, "point_symbols", bkt, .dangers_only);
@@ -1215,7 +1171,7 @@ pub fn json(alloc: std.mem.Allocator, opts: Options) ![]u8 {
         // below the opaque DANGER01/02 ovals the depths would be invisible.
         for (scamin_buckets) |bkt| {
             var dbuf: [96]u8 = undefined;
-            try soundingsLayer(js, &s, bkt, try std.fmt.bufPrint(&dbuf, "danger_soundings{s}", .{bkt.suffix}), FILT_DANGER_SND, false);
+            try soundingsLayer(js, &s, bkt, try std.fmt.bufPrint(&dbuf, "danger_soundings{s}", .{bkt.suffix}), FILT_DANGER_SND);
         }
         // LIGHTS on top: emitted after every other point symbol so a light always draws
         // over a same-priority bridge that lives in a different scamin bucket layer.
@@ -1683,128 +1639,8 @@ test "json: the soundings switch drives the soundings layers' visibility" {
     try std.testing.expect(std.mem.indexOf(u8, on, "\"visibility\":\"none\"") == null);
 }
 
-test "json: dense soundings emit a single ungated spot layer" {
-    const a = std.testing.allocator;
-    const ct =
-        \\{"day":{"DEPDW":"#c9edff"},"dusk":{},"night":{}}
-    ;
-    const scamin = [_]u32{ 60000, 120000, 240000 };
-    const m = mariner.Settings{
-        .display_other = true,
-        .show_soundings = true,
-        .dense_soundings = true,
-    };
 
-    const out = try json(a, .{
-        .scheme = "day",
-        .colortables_json = ct,
-        .sprite = "sprite",
-        .glyphs = "glyphs/{fontstack}/{range}.pbf",
-        .source_tiles = "tile57://{z}/{x}/{y}",
-        .mariner = m,
-        .scamin = &scamin,
-    });
-    defer a.free(out);
 
-    var parsed = try std.json.parseFromSlice(std.json.Value, a, out, .{});
-    defer parsed.deinit();
-    const layers = parsed.value.object.get("layers").?.array.items;
-
-    var spot_count: usize = 0;
-    for (layers) |layer| {
-        const obj = layer.object;
-        const id = obj.get("id").?.string;
-        if (std.mem.eql(u8, id, "soundings")) spot_count += 1;
-        try std.testing.expect(!std.mem.startsWith(u8, id, "soundings#sm"));
-    }
-    try std.testing.expectEqual(@as(usize, 1), spot_count);
-}
-
-test "json: dense soundings use zoom-adaptive padding and shallow-first priority" {
-    const a = std.testing.allocator;
-    const ct =
-        \\{"day":{"DEPDW":"#c9edff"},"dusk":{},"night":{}}
-    ;
-    const m = mariner.Settings{
-        .display_other = true,
-        .show_soundings = true,
-        .dense_soundings = true,
-    };
-
-    const out = try json(a, .{
-        .scheme = "day",
-        .colortables_json = ct,
-        .sprite = "sprite",
-        .glyphs = "glyphs/{fontstack}/{range}.pbf",
-        .source_tiles = "tile57://{z}/{x}/{y}",
-        .mariner = m,
-    });
-    defer a.free(out);
-
-    var parsed = try std.json.parseFromSlice(std.json.Value, a, out, .{});
-    defer parsed.deinit();
-    const layers = parsed.value.object.get("layers").?.array.items;
-    const layout = layerById(layers, "soundings").?.object.get("layout").?.object;
-
-    const padding = layout.get("icon-padding") orelse return error.TestExpectedEqual;
-    try std.testing.expect(padding == .array);
-    const sort_key = layout.get("symbol-sort-key") orelse return error.TestExpectedEqual;
-    try std.testing.expect(sort_key == .array);
-
-    const danger_layout = layerById(layers, "danger_soundings").?.object.get("layout").?.object;
-    try std.testing.expect(danger_layout.get("icon-padding") == null);
-    try std.testing.expect(danger_layout.get("symbol-sort-key") == null);
-}
-
-test "json: dense mode collision-thins spot soundings only" {
-    const a = std.testing.allocator;
-    const ct =
-        \\{"day":{"DEPDW":"#c9edff"},"dusk":{},"night":{}}
-    ;
-    var m = mariner.Settings{
-        .display_other = true,
-        .show_soundings = true,
-        .dense_soundings = true,
-    };
-
-    const dense = try json(a, .{
-        .scheme = "day",
-        .colortables_json = ct,
-        .sprite = "sprite",
-        .glyphs = "glyphs/{fontstack}/{range}.pbf",
-        .source_tiles = "tile57://{z}/{x}/{y}",
-        .mariner = m,
-    });
-    defer a.free(dense);
-    var parsed = try std.json.parseFromSlice(std.json.Value, a, dense, .{});
-    defer parsed.deinit();
-    const layers = parsed.value.object.get("layers").?.array.items;
-
-    const spot = layerById(layers, "soundings").?.object.get("layout").?.object;
-    try std.testing.expectEqual(false, spot.get("icon-allow-overlap").?.bool);
-    try std.testing.expectEqual(false, spot.get("icon-ignore-placement").?.bool);
-
-    const danger = layerById(layers, "danger_soundings").?.object.get("layout").?.object;
-    try std.testing.expectEqual(true, danger.get("icon-allow-overlap").?.bool);
-    try std.testing.expectEqual(true, danger.get("icon-ignore-placement").?.bool);
-
-    m.dense_soundings = false;
-    const strict = try json(a, .{
-        .scheme = "day",
-        .colortables_json = ct,
-        .sprite = "sprite",
-        .glyphs = "glyphs/{fontstack}/{range}.pbf",
-        .source_tiles = "tile57://{z}/{x}/{y}",
-        .mariner = m,
-    });
-    defer a.free(strict);
-    var strict_parsed = try std.json.parseFromSlice(std.json.Value, a, strict, .{});
-    defer strict_parsed.deinit();
-    const strict_layers = strict_parsed.value.object.get("layers").?.array.items;
-    const strict_spot = layerById(strict_layers, "soundings").?.object.get("layout").?.object;
-    try std.testing.expectEqual(true, strict_spot.get("icon-allow-overlap").?.bool);
-    try std.testing.expectEqual(true, strict_spot.get("icon-ignore-placement").?.bool);
-}
 
 test "json: size_scale wraps icon/line/text sizes in a multiplier" {
     const a = std.testing.allocator;
