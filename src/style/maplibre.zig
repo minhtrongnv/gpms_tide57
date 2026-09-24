@@ -414,12 +414,37 @@ fn writeScaminClause(js: *Stringify, bkt: Bucket) !void {
         return;
     }
     // zoom_gate (the only other clause-bearing mode; has_clause guarantees it):
-    // the bake already folded scamin >= K/2^zoom into the per-feature `vz`
-    // (the fractional display zoom at which the SCAMIN admits — see
-    // scene.augmentV3), so the gate is one compare instead of a
-    // coalesce/divide/pow tree per feature per layer. A feature without
-    // SCAMIN carries no vz and coalesces to 0: always shown.
-    try js.write(.{ "<=", .{ "coalesce", .{ "get", "vz" }, 0 }, .{"zoom"} });
+    // tile57/3 bakes the fractional admission zoom into `vz`, so current
+    // archives stay on the cheap get+compare path. Older tile57/2 archives
+    // carry only raw `scamin`; using a literal 0 fallback for missing `vz`
+    // made EVERY SCAMIN'd feature visible at every zoom when a live compositor
+    // was opened over a stale cache. That is exactly the "all symbols at
+    // overview scale" failure mode.
+    //
+    // Coalesce lazily falls back to the old mathematically-equivalent gate only
+    // when `vz` is absent:
+    //
+    //   vz = log2(K / scamin)
+    //   show when vz <= zoom
+    //
+    // Missing SCAMIN coalesces to a huge denominator, yielding a negative
+    // admission zoom and therefore remaining always-visible as before.
+    try js.write(.{
+        "<=",
+        .{
+            "coalesce",
+            .{ "get", "vz" },
+            .{
+                "log2",
+                .{
+                    "/",
+                    bkt.zoom_k,
+                    .{ "coalesce", .{ "get", "scamin" }, SCAMIN_COALESCE_MAX },
+                },
+            },
+        },
+        .{"zoom"},
+    });
 }
 
 // Write a layer's `filter`. The filter ANDs together (in order): the `base` predicate
@@ -1489,7 +1514,7 @@ test "json: ignore_scamin drops SCAMIN gating (no buckets, no zoom-gate)" {
     // gate compares the baked vz against ["zoom"].
     const gated = try json(a, base);
     defer a.free(gated);
-    try std.testing.expect(std.mem.indexOf(u8, gated, "[\"<=\",[\"coalesce\",[\"get\",\"vz\"],0],[\"zoom\"]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, gated, "[\"<=\",[\"coalesce\",[\"get\",\"vz\"],[\"log2\",[\"/\",") != null);
     try std.testing.expect(std.mem.indexOf(u8, gated, "#sm") == null);
 
     // Manifest present, ignore_scamin -> no buckets at all.
@@ -1504,16 +1529,16 @@ test "json: ignore_scamin drops SCAMIN gating (no buckets, no zoom-gate)" {
     nomanifest.scamin = &.{};
     const out_fb = try json(a, nomanifest);
     defer a.free(out_fb);
-    try std.testing.expect(std.mem.indexOf(u8, out_fb, "[\"<=\",[\"coalesce\",[\"get\",\"vz\"],0],[\"zoom\"]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out_fb, "[\"<=\",[\"coalesce\",[\"get\",\"vz\"],[\"log2\",[\"/\",") != null);
     try std.testing.expect(std.mem.indexOf(u8, out_fb, "#sm") == null);
-    try std.testing.expect(std.mem.indexOf(u8, out_fb, "log2") == null); // old form retired
+    try std.testing.expect(std.mem.indexOf(u8, out_fb, "\"log2\"") != null); // stale tile57/2 fallback
 
     // No manifest + ignore_scamin -> even the static gate is gone.
     var nm_ign = nomanifest;
     nm_ign.ignore_scamin = true;
     const out_nm_ign = try json(a, nm_ign);
     defer a.free(out_nm_ign);
-    try std.testing.expect(std.mem.indexOf(u8, out_nm_ign, "[\"<=\",[\"coalesce\",[\"get\",\"vz\"],0],[\"zoom\"]]") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out_nm_ign, "[\"<=\",[\"coalesce\",[\"get\",\"vz\"],[\"log2\",[\"/\",") == null);
     try std.testing.expect(std.mem.indexOf(u8, out_nm_ign, "#sm") == null);
 }
 
@@ -1792,16 +1817,16 @@ test "buildFromTemplateScamin: a manifest no longer buckets — the merged zoom-
     // No manifest -> the baked-vz SCAMIN zoom-gate, no #sm buckets.
     const plain = try buildFromTemplate(a, cs_template, &m, cs_ct, null, 1700000000);
     defer a.free(plain);
-    try std.testing.expect(std.mem.indexOf(u8, plain, "[\"<=\",[\"coalesce\",[\"get\",\"vz\"],0],[\"zoom\"]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, plain, "[\"<=\",[\"coalesce\",[\"get\",\"vz\"],[\"log2\",[\"/\",") != null);
     try std.testing.expect(std.mem.indexOf(u8, plain, "#sm") == null);
     // With a manifest -> STILL the merged zoom-gate (per-value buckets retired): the
     // manifest no longer produces #sm layers, only the TileJSON ladder (served apart).
     const scamin = [_]u32{ 89999, 259999 };
     const bucketed = try buildFromTemplateScamin(a, cs_template, &m, cs_ct, null, 1700000000, &scamin, 38.0);
     defer a.free(bucketed);
-    try std.testing.expect(std.mem.indexOf(u8, bucketed, "[\"<=\",[\"coalesce\",[\"get\",\"vz\"],0],[\"zoom\"]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bucketed, "[\"<=\",[\"coalesce\",[\"get\",\"vz\"],[\"log2\",[\"/\",") != null);
     try std.testing.expect(std.mem.indexOf(u8, bucketed, "#sm") == null);
-    try std.testing.expect(std.mem.indexOf(u8, bucketed, "log2") == null);
+    try std.testing.expect(std.mem.indexOf(u8, bucketed, "\"log2\"") != null);
 }
 
 // ---- smax removal -----------------------------------------------------------
@@ -2116,7 +2141,7 @@ test "json: both merged modes (zoom-gate default, filter-gate exact) give one la
     defer a.free(merged);
     try std.testing.expect(std.mem.indexOf(u8, merged, "#sm") == null);
     try expectOnlyPlacementMinzooms(merged);
-    try std.testing.expect(std.mem.indexOf(u8, merged, "[\"<=\",[\"coalesce\",[\"get\",\"vz\"],0],[\"zoom\"]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, merged, "[\"<=\",[\"coalesce\",[\"get\",\"vz\"],[\"log2\",[\"/\",") != null);
 
     // Filter-gate (?scaminexact): one live-clause layer per family — the SAME layer
     // set, with the client-driven curDenom clause instead of the zoom expression.
