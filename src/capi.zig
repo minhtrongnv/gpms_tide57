@@ -2437,6 +2437,9 @@ const CMariner = extern struct {
     // this switches without a re-bake. Appended for ABI-append-safety; a zeroed
     // struct keeps the portrayed name.
     preferred_language: [4]u8,
+    // Host opt-in for legacy/demo SOUNDG density: ignore SCAMIN only for spot
+    // soundings. Appended for ABI safety; zero/default keeps current behaviour.
+    dense_soundings: bool,
 };
 
 /// The tri-state `soundings` field as the engine's optional bool.
@@ -2490,6 +2493,7 @@ fn marinerFromC(cm: *const CMariner) mariner.Settings {
         .ignore_scamin = cm.ignore_scamin,
         .scamin_filter_gate = cm.scamin_filter_gate,
         .show_soundings = soundingsOf(cm.soundings),
+        .dense_soundings = cm.dense_soundings,
         .show_overscale = cm.show_overscale,
         .size_scale = cm.size_scale,
         // Appended fields: an un-set (zero) multiplier means "no extra scale", so a
@@ -2685,6 +2689,7 @@ export fn tile57_mariner_defaults(cm: ?*CMariner) callconv(.c) void {
         .device_scale = d.device_scale,
         .chart_over_image = d.chart_over_image,
         .preferred_language = langCode(d.preferred_language),
+        .dense_soundings = d.dense_soundings,
     };
 }
 

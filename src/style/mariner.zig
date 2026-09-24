@@ -55,6 +55,11 @@ pub const Settings = struct {
     // low-priority clutter with them. `null` = follow the display category, as before.
     show_soundings: ?bool = null,
 
+    // Host opt-in for the legacy/demo sounding density: ignore SCAMIN only for
+    // spot SOUNDG marks while keeping every other feature scale-gated normally.
+    // Default false preserves the current S-52/NOAA density behaviour.
+    dense_soundings: bool = false,
+
     // -- overlays / opt-in markers (off by default) --
     /// A RADAR overlay is being drawn under/over the chart. This is what gates
     /// the S-101 DisplayPlane axis: S-52 PresLib §10.3.4.2 gives the OVERRADAR
