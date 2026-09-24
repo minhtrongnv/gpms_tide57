@@ -54,6 +54,44 @@ func BakeAssets(catalogDir string) (Assets, error) {
 	}, nil
 }
 
+// BakeMapLibreSprite generates the MapLibre-specific portrayal sprite atlas.
+//
+// This is deliberately distinct from BakeAssets().Sprite*: the generic atlas is
+// rasterized at the historical 0.08 units, while the current MapLibre style
+// expects the drawn-scale atlas produced by tile57_bake_sprite_mln. Pairing the
+// generic atlas with the current style inflates chart symbols by roughly
+// 0.08/0.028346 ~= 2.82x.
+//
+// pixelRatio is the display/device pixel ratio used to rasterize the sheet. Pass
+// 1 for the server's base sprite; MapLibre's logical size is preserved by the
+// pixelRatio metadata.
+func BakeMapLibreSprite(
+	catalogDir string,
+	pixelRatio float64,
+	scheme Scheme,
+) (jsonBytes, pngBytes []byte, err error) {
+	cdir, free := cStringOrNil(catalogDir)
+	defer free()
+
+	var ca C.tile57_assets
+	var cerr C.tile57_error
+
+	if st := C.tile57_bake_sprite_mln(
+		cdir,
+		C.double(pixelRatio),
+		C.tile57_scheme(scheme),
+		&ca,
+		&cerr,
+	); st != C.TILE57_OK {
+		return nil, nil, statusError(st, &cerr)
+	}
+	defer C.tile57_assets_free(&ca)
+
+	return copyBytes(ca.sprite_json, ca.sprite_json_len),
+		copyBytes(ca.sprite_png, ca.sprite_png_len),
+		nil
+}
+
 // copyBytes copies a libtile57-owned (uint8_t*, size_t) buffer into Go memory
 // WITHOUT freeing it (the whole tile57_assets is freed at once by
 // tile57_assets_free). (nil for an empty/NULL buffer.)
