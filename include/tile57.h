@@ -1750,6 +1750,16 @@ tile57_status tile57_bake_glyph_sdf(tile57_assets *out, tile57_error *err);
  * place names and italic hydrography from the SDF text path. Free with
  * tile57_assets_free. */
 tile57_status tile57_bake_glyph_sdf_face(tile57_assets *out, int32_t face, tile57_error *err);
+
+/* Emit one MapLibre/Mapbox glyph-PBF block for an embedded label face.
+ * face: 0 regular ("Noto Sans Regular"), 1 bold ("Noto Sans Bold"),
+ *       2 italic ("Noto Sans Italic").
+ * range_start must be a 256-codepoint boundary (0, 256, 512, ...).
+ * The returned bytes are a complete glyphs.proto payload for
+ * "<range_start>-<range_start+255>.pbf"; free *out with tile57_free. */
+tile57_status tile57_maplibre_glyph_pbf(int32_t face, uint32_t range_start,
+                                        uint8_t **out, size_t *out_len,
+                                        tile57_error *err);
 /* tile57_bake_glyph_sdf for named codepoints, out of a font the HOST supplies:
  * `font_bytes` is a TrueType file or a collection, of which the first face is
  * read, and `codepoints` names the characters to rasterize.

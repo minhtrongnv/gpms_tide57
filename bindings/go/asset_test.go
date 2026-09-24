@@ -3,6 +3,7 @@
 package tile57
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 )
@@ -84,5 +85,40 @@ func TestBakeMapLibreSprite(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("MapLibre sprite has no drawable cells")
+	}
+}
+
+
+func TestMapLibreGlyphPBFEmbeddedFaces(t *testing.T) {
+	faces := []struct {
+		face int32
+		name string
+	}{
+		{MapLibreFontRegular, "Noto Sans Regular"},
+		{MapLibreFontBold, "Noto Sans Bold"},
+		{MapLibreFontItalic, "Noto Sans Italic"},
+	}
+	for _, tc := range faces {
+		t.Run(tc.name, func(t *testing.T) {
+			pbf, err := MapLibreGlyphPBF(tc.face, 0)
+			if err != nil {
+				t.Fatalf("MapLibreGlyphPBF: %v", err)
+			}
+			if len(pbf) < 1000 {
+				t.Fatalf("glyph PBF unexpectedly small: %d bytes", len(pbf))
+			}
+			if !bytes.Contains(pbf, []byte(tc.name)) {
+				t.Fatalf("glyph PBF missing fontstack name %q", tc.name)
+			}
+			if !bytes.Contains(pbf, []byte("0-255")) {
+				t.Fatal("glyph PBF missing 0-255 range marker")
+			}
+		})
+	}
+}
+
+func TestMapLibreGlyphPBFRejectsUnalignedRange(t *testing.T) {
+	if _, err := MapLibreGlyphPBF(MapLibreFontRegular, 1); err == nil {
+		t.Fatal("expected unaligned range to fail")
 	}
 }

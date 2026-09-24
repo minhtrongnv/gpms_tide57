@@ -2178,6 +2178,7 @@ export fn tile57_render_symbol_run(
 }
 
 const glyph_sdf = @import("sprite").glyph;
+const glyph_pbf = @import("sprite/glyphpbf.zig");
 
 // Glyph metrics as compact JSON: {"em_px","pad","glyphs":{cp:[u0,v0,u1,v1,ox,oy,w,h,adv]}}.
 fn glyphMetricsJson(a: std.mem.Allocator, atlas: *const glyph_sdf.Atlas) ![]u8 {
@@ -2207,6 +2208,38 @@ export fn tile57_bake_glyph_sdf(out: ?*CAssets, err: ?*CError) callconv(.c) c_in
 /// wants bold place names and italic hydrography bakes one atlas per face.
 export fn tile57_bake_glyph_sdf_face(out: ?*CAssets, face: i32, err: ?*CError) callconv(.c) c_int {
     return bakeGlyphSdf(out, face, err);
+}
+
+
+/// Emit one MapLibre glyph-PBF range from an embedded label face.
+/// face: 0 regular, 1 bold, 2 italic. range_start must be a 256-codepoint
+/// boundary and the requested block must stay within Unicode.
+export fn tile57_maplibre_glyph_pbf(
+    face: i32,
+    range_start: u32,
+    out: ?*?[*]u8,
+    out_len: ?*usize,
+    err: ?*CError,
+) callconv(.c) c_int {
+    const o, const n = bytesOut(out, out_len) catch return failWith(err, .badarg, bad_out);
+    if (face < 0 or face > 2)
+        return failWith(err, .badarg, "face must be 0 (regular), 1 (bold), or 2 (italic)");
+    if ((range_start & 0xff) != 0 or range_start > 0x10ff00)
+        return failWith(err, .badarg, "range_start must be a 256-codepoint Unicode block");
+
+    const ft = @import("render").font;
+    const font: []const u8 = switch (face) {
+        1 => ft.notosans_bold,
+        2 => ft.notosans_italic,
+        else => ft.notosans,
+    };
+    const name: []const u8 = switch (face) {
+        1 => "Noto Sans Bold",
+        2 => "Noto Sans Italic",
+        else => "Noto Sans Regular",
+    };
+    const bytes = glyph_pbf.encodeRange(gpa, font, name, @intCast(range_start)) catch |e| return fail(err, e);
+    return exportOut(err, o, n, bytes);
 }
 
 /// An SDF sheet for named codepoints, out of a font the HOST supplies. See
