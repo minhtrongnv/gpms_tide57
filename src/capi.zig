@@ -2224,7 +2224,7 @@ export fn tile57_maplibre_glyph_pbf(
     const o, const n = bytesOut(out, out_len) catch return failWith(err, .badarg, bad_out);
     if (face < 0 or face > 2)
         return failWith(err, .badarg, "face must be 0 (regular), 1 (bold), or 2 (italic)");
-    if (range_start & 0xff != 0 or range_start > 0x10ff00)
+    if ((range_start & 0xff) != 0 or range_start > 0x10ff00)
         return failWith(err, .badarg, "range_start must be a 256-codepoint Unicode block");
 
     const ft = @import("render").font;
