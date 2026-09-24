@@ -2338,7 +2338,7 @@ fn renderComposeGpuSceneInner(src: *compose_mod.ComposeSource, lon: f64, lat: f6
     // first thing to read when tile-shaped holes appear over charted ground.
     if (empty > 0) std.debug.print("gpu scene z{d}: {d}/{d} tiles empty ({d} fresh)\n", .{ vt.z, empty, total, fresh });
 
-    parts.append(sa, try render.gpu.assembleLabels(sa, sa, cands.items, zoom, settings.ignore_scamin)) catch {};
+    parts.append(sa, try render.gpu.assembleLabels(sa, sa, cands.items, zoom, settings.size_scale, settings.ignore_scamin)) catch {};
 
     out.scene = try render.gpu.assemble(out.arena.allocator(), sa, parts.items);
     return out;
@@ -3251,7 +3251,7 @@ pub const Chart = struct {
         // Labels: box every candidate at the view zoom and declutter across the
         // WHOLE view at once, so a name never repeats across a seam. Cheap — no
         // re-shaping (that was cached per tile).
-        parts.append(sa, try render.gpu.assembleLabels(sa, sa, cands.items, zoom, settings.ignore_scamin)) catch {};
+        parts.append(sa, try render.gpu.assembleLabels(sa, sa, cands.items, zoom, settings.size_scale, settings.ignore_scamin)) catch {};
 
         out.scene = try render.gpu.assemble(out.arena.allocator(), sa, parts.items);
         return out;
