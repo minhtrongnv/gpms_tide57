@@ -1164,13 +1164,25 @@ pub fn json(alloc: std.mem.Allocator, opts: Options) ![]u8 {
     //   set per SCAMIN bucket rides each pass.
     if (sprite_on) {
         for (scamin_buckets) |bkt| try pointSymbolLayers(js, &s, "point_symbols", bkt, .base);
-        for (scamin_buckets) |bkt| {
-            var sbuf: [96]u8 = undefined;
-            // The hosted demo was baked before spot-sounding SCAMIN density was
-            // tightened, so an opt-in dense mode reproduces that useful "more
-            // depth numbers" view without disabling SCAMIN for buoys/lights/text.
-            const sbkt: Bucket = if (m.dense_soundings) .{} else bkt;
-            try soundingsLayer(js, &s, sbkt, try std.fmt.bufPrint(&sbuf, "soundings{s}", .{sbkt.suffix}), FILT_SPOT_SND, true);
+        if (m.dense_soundings) {
+            // Dense mode intentionally removes the SCAMIN bucket gate for spot
+            // soundings. Emit ONE ungated layer. Emitting one ungated copy per
+            // SCAMIN bucket duplicates the same SOUNDG candidate pool many times,
+            // defeating collision thinning and creating the "wall of numbers"
+            // seen around ~1:95k.
+            try soundingsLayer(js, &s, .{}, "soundings", FILT_SPOT_SND, true);
+        } else {
+            for (scamin_buckets) |bkt| {
+                var sbuf: [96]u8 = undefined;
+                try soundingsLayer(
+                    js,
+                    &s,
+                    bkt,
+                    try std.fmt.bufPrint(&sbuf, "soundings{s}", .{bkt.suffix}),
+                    FILT_SPOT_SND,
+                    true,
+                );
+            }
         }
         // Over-soundings pass: high-priority symbols + the danger deviation (see PointMode).
         for (scamin_buckets) |bkt| try pointSymbolLayers(js, &s, "point_symbols", bkt, .dangers_only);
@@ -1644,6 +1656,43 @@ test "json: the soundings switch drives the soundings layers' visibility" {
     const on = try json(a, base);
     defer a.free(on);
     try std.testing.expect(std.mem.indexOf(u8, on, "\"visibility\":\"none\"") == null);
+}
+
+test "json: dense soundings emit a single ungated spot layer" {
+    const a = std.testing.allocator;
+    const ct =
+        \\{"day":{"DEPDW":"#c9edff"},"dusk":{},"night":{}}
+    ;
+    const scamin = [_]u32{ 60000, 120000, 240000 };
+    const m = mariner.Settings{
+        .display_other = true,
+        .show_soundings = true,
+        .dense_soundings = true,
+    };
+
+    const out = try json(a, .{
+        .scheme = "day",
+        .colortables_json = ct,
+        .sprite = "sprite",
+        .glyphs = "glyphs/{fontstack}/{range}.pbf",
+        .source_tiles = "tile57://{z}/{x}/{y}",
+        .mariner = m,
+        .scamin = &scamin,
+    });
+    defer a.free(out);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, a, out, .{});
+    defer parsed.deinit();
+    const layers = parsed.value.object.get("layers").?.array.items;
+
+    var spot_count: usize = 0;
+    for (layers) |layer| {
+        const obj = layer.object;
+        const id = obj.get("id").?.string;
+        if (std.mem.eql(u8, id, "soundings")) spot_count += 1;
+        try std.testing.expect(!std.mem.startsWith(u8, id, "soundings#sm"));
+    }
+    try std.testing.expectEqual(@as(usize, 1), spot_count);
 }
 
 test "json: dense mode collision-thins spot soundings only" {
