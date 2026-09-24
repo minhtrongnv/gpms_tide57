@@ -28,7 +28,6 @@
  * @property {boolean} display_standard       Show "standard" category.
  * @property {boolean} display_other          Show "other" category.
  * @property {boolean|null} show_soundings     Spot soundings override; null follows OTHER.
- * @property {boolean} dense_soundings      Ignore SCAMIN only for spot SOUNDG (legacy/demo density).
  * @property {boolean} data_quality           M_QUAL data-quality overlay.
  * @property {boolean} show_inform_callouts   INFORM01 callouts.
  * @property {boolean} show_meta_bounds       Meta coverage/scale bounds.
@@ -63,7 +62,6 @@ export const DEFAULT_SETTINGS = Object.freeze({
   display_standard: true,
   display_other: false,
   show_soundings: null,
-  dense_soundings: false,
   data_quality: false,
   show_inform_callouts: false,
   show_meta_bounds: false,
