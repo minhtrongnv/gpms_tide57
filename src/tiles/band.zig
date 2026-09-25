@@ -29,11 +29,15 @@ pub fn bandOf(cscl: i32) Band {
 // OpenCPN S-57 chart-selection scale: a vector chart remains normally usable
 // until the viewport denominator is about 4× the chart's native compilation scale
 // (s57chart::GetNormalScaleMax / Quilt::GetNomScaleMin with zoom modifier 0).
-// Convert that physical 1:N limit to the INTEGER source-tile zoom which first has
-// to carry the chart. We floor the fractional crossing because one z tile serves
-// the whole [z,z+1) display interval; ceil would make the chart appear up to one
-// full zoom late. This is computed once per cell when the compositor partition is
-// opened, never in the tile hot path.
+//
+// The compositor can switch ownership only at INTEGER source-tile zooms, while the
+// true physical crossing is fractional. Ownership must NOT start before the real
+// crossing: doing floor(z) lets a finer chart steal the whole preceding zoom level
+// (for example a 1:20k harbour cell at z11 / ~1:90k although its 4× limit is ~1:80k),
+// after which that cell's lower SCAMIN values make soundings/ATONs disappear when
+// the user zooms IN. Use ceil(z) so the old/coarser owner remains until the first
+// tile zoom wholly inside the finer chart's admissible scale. This also lines up
+// with the discrete ECDIS viewing-scale ladder used by the client.
 pub fn openCpnAdmissionFloor(cscl: i32, lat_deg: f64) u8 {
     const native: f64 = @floatFromInt(if (cscl > 0) cscl else 50_000);
     const max_denom = native * 4.0;
@@ -44,15 +48,17 @@ pub fn openCpnAdmissionFloor(cscl: i32, lat_deg: f64) u8 {
     const z = std.math.log2(k / max_denom);
     if (z <= 0) return 0;
     if (z >= 24) return 24;
-    return @intFromFloat(@floor(z));
+    return @intFromFloat(@ceil(z));
 }
 
-test "OpenCPN admission floor is two-scale-level chart admission, not NOAA band floor" {
-    // Chesapeake (~39N): an 1:80k approach chart is eligible by about 1:320k,
-    // whose crossing is z~9.5, so z9 must contain it. A 1:20k harbour chart
-    // crosses around z11.5 and therefore first needs a z11 source tile.
-    try std.testing.expectEqual(@as(u8, 9), openCpnAdmissionFloor(80_000, 39.0));
-    try std.testing.expectEqual(@as(u8, 11), openCpnAdmissionFloor(20_000, 39.0));
+test "OpenCPN admission floor never promotes a finer chart before its physical crossing" {
+    // Chesapeake (~39N):
+    //   1:80k  ×4 => 1:320k, crossing z~9.49  -> first safe integer tile z10.
+    //   1:20k  ×4 =>  1:80k, crossing z~11.49 -> first safe integer tile z12.
+    // In particular the harbour chart must NOT own z11 (~1:90k viewing step),
+    // otherwise its lower-SCAMIN SOUNDG/ATONs replace still-visible coarse data.
+    try std.testing.expectEqual(@as(u8, 10), openCpnAdmissionFloor(80_000, 39.0));
+    try std.testing.expectEqual(@as(u8, 12), openCpnAdmissionFloor(20_000, 39.0));
 }
 
 /// Overscale fill-up depth DEFAULT: how many zooms past its native max a band's
