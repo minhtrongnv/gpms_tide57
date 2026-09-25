@@ -3,8 +3,6 @@
 //! (which bakes each cell over its band's zooms) and the compositor (which reads
 //! the band to decide overscale fill-up), so neither owns the mapping.
 
-const std = @import("std");
-
 /// Native [minzoom, maxzoom] Web-Mercator span for a navigational-purpose band.
 pub const ZoomRange = struct { min: u8, max: u8 };
 
@@ -24,68 +22,6 @@ pub fn bandOf(cscl: i32) Band {
     if (n <= 500_000) return .coastal;
     if (n <= 2_300_000) return .general;
     return .overview;
-}
-
-// Canonical ECDIS/S-101 viewing-scale ladder used by the web client.
-// Coarse -> fine.  A chart becomes eligible on the FIRST selected viewing scale
-// whose denominator is within OpenCPN's normal vector-chart underzoom limit
-// (roughly 4 × native CSCL at zoom modifier 0).
-//
-// IMPORTANT: ownership is ultimately stored on INTEGER source-tile zooms.  Using
-// floor/ceil of the raw fractional 4× crossing is wrong around a tile boundary:
-// e.g. at ~39N, CSCL 1:50k crosses 1:200k at z~10.17 (it must already serve the
-// selected 1:180k step -> source z10), while CSCL 1:20k crosses 1:80k at z~11.49
-// (it must NOT serve the selected 1:90k step; first eligible is 1:45k -> source
-// z12).  Quantize to the SAME semantic viewing-scale ladder first, then derive
-// the integer source zoom.  This makes chart ownership monotonic across the
-// exact scale stops the mariner can select.
-pub const ECDIS_DISPLAY_SCALES = [_]f64{
-    10_000_000,
-    3_500_000,
-    1_500_000,
-    700_000,
-    350_000,
-    180_000,
-    90_000,
-    45_000,
-    22_000,
-    12_000,
-    8_000,
-    4_000,
-    3_000,
-    2_000,
-    1_000,
-};
-
-fn firstEligibleDisplayScale(max_denom: f64) f64 {
-    for (ECDIS_DISPLAY_SCALES) |d| {
-        if (d <= max_denom) return d;
-    }
-    return ECDIS_DISPLAY_SCALES[ECDIS_DISPLAY_SCALES.len - 1];
-}
-
-pub fn openCpnAdmissionFloor(cscl: i32, lat_deg: f64) u8 {
-    const native: f64 = @floatFromInt(if (cscl > 0) cscl else 50_000);
-    const selected = firstEligibleDisplayScale(native * 4.0);
-
-    // Same reference physical pixel as the style/SCAMIN model.  The selected
-    // scale is a semantic stop; MapLibre requests floor(cameraZoom) source tiles.
-    const k = 78_271.516964020485 * @cos(lat_deg * std.math.pi / 180.0) / 0.0002645;
-    if (!(k > 0) or !(selected > 0)) return 0;
-    const z = std.math.log2(k / selected);
-    if (z <= 0) return 0;
-    if (z >= 24) return 24;
-    return @intFromFloat(@floor(z));
-}
-
-test "OpenCPN admission follows ECDIS viewing-scale stops" {
-    // Chesapeake (~39N):
-    //   1:80k ×4 = 1:320k -> 350k is too coarse; first eligible step 180k -> z10.
-    //   1:50k ×4 = 1:200k -> first eligible step 180k -> z10.
-    //   1:20k ×4 =  1:80k -> 90k is too coarse; first eligible step 45k  -> z12.
-    try std.testing.expectEqual(@as(u8, 10), openCpnAdmissionFloor(80_000, 39.0));
-    try std.testing.expectEqual(@as(u8, 10), openCpnAdmissionFloor(50_000, 39.0));
-    try std.testing.expectEqual(@as(u8, 12), openCpnAdmissionFloor(20_000, 39.0));
 }
 
 /// Overscale fill-up depth DEFAULT: how many zooms past its native max a band's
@@ -120,6 +56,7 @@ pub fn bandZooms(band: Band) ZoomRange {
 }
 
 test "bandOf maps compilation scale to band" {
+    const std = @import("std");
     try std.testing.expectEqual(Band.harbor, bandOf(20_000));
     try std.testing.expectEqual(Band.approach, bandOf(50_000));
     try std.testing.expectEqual(Band.overview, bandOf(3_000_000));
@@ -127,6 +64,7 @@ test "bandOf maps compilation scale to band" {
 }
 
 test "bandZooms is finest-to-coarsest with one-zoom overlap" {
+    const std = @import("std");
     try std.testing.expectEqual(ZoomRange{ .min = 11, .max = 13 }, bandZooms(.approach));
     try std.testing.expectEqual(ZoomRange{ .min = 9, .max = 11 }, bandZooms(.coastal));
 }
