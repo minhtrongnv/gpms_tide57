@@ -116,14 +116,9 @@ pub fn toPlaneCells(a: std.mem.Allocator, loaded: []const LoadedCov) ![]geometry
                 }
             }
         }
-        const center_lat = (lc.bounds[1] + lc.bounds[3]) * 0.5;
         cells[i] = .{
             .cscl = lc.cscl,
-            // OpenCPN admits an S-57 chart out to roughly 4x its native
-            // compilation scale (zoom modifier 0). Partition ownership must
-            // therefore switch by the chart's own CSCL, not a hard NOAA band
-            // boundary, or approach/harbor navaids appear 1-2 zooms late.
-            .band_floor = band.openCpnAdmissionFloor(lc.cscl, center_lat),
+            .band_floor = band.bandZooms(band.bandOf(lc.cscl)).min,
             .order = order[i],
             .cov1 = try out.toOwnedSlice(a),
             .light_bbox = if (lc.light_reach) |lr| lr.bbox else null,
