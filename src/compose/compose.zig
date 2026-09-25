@@ -116,14 +116,9 @@ pub fn toPlaneCells(a: std.mem.Allocator, loaded: []const LoadedCov) ![]geometry
                 }
             }
         }
-        const center_lat = (lc.bounds[1] + lc.bounds[3]) * 0.5;
         cells[i] = .{
             .cscl = lc.cscl,
-            // OpenCPN admits an S-57 chart out to roughly 4x its native
-            // compilation scale (zoom modifier 0). Partition ownership must
-            // therefore switch by the chart's own CSCL, not a hard NOAA band
-            // boundary, or approach/harbor navaids appear 1-2 zooms late.
-            .band_floor = band.openCpnAdmissionFloor(lc.cscl, center_lat),
+            .band_floor = band.bandZooms(band.bandOf(lc.cscl)).min,
             .order = order[i],
             .cov1 = try out.toOwnedSlice(a),
             .light_bbox = if (lc.light_reach) |lr| lr.bbox else null,
@@ -699,6 +694,11 @@ pub const ComposeSource = struct {
     maxz: u8,
     loop_max: u8, // deepest zoom the sources can serve (native windows + one fill-up overscale zoom)
     bounds: [4]f64, // union coverage [west, south, east, north] in degrees
+    /// Distinct SCAMIN denominators present across all coverage-carrying archives,
+    /// ascending. Built once from each PMTiles metadata block when the compositor
+    /// opens; used by live TileJSON so the browser can build native fractional-
+    /// minzoom buckets exactly like the static demo.
+    scamins: []const u32 = &.{},
 
     // A RENDER-layer cache hung off this source for its lifetime — today the per-tile
     // label-candidate memo the view label pass resolves from (render/labelcache.zig).
@@ -859,6 +859,12 @@ pub const ComposeSource = struct {
         }
         return self.loop_max;
     }
+    /// Distinct SCAMIN denominators across the composed chart set. Borrowed
+    /// from this source and valid until deinit.
+    pub fn scamin(self: *const ComposeSource) []const u32 {
+        return self.scamins;
+    }
+
     pub fn deinit(self: *ComposeSource) void {
         const gpa = self.gpa;
         if (self.render_cache) |p| {
@@ -1159,6 +1165,53 @@ fn dedupTwinArchives(
     return w;
 }
 
+fn scanScaminArray(json: []const u8, set: *std.AutoHashMap(u32, void)) void {
+    const ki = std.mem.indexOf(u8, json, "\"scamin\"") orelse return;
+    var i = ki + "\"scamin\"".len;
+    while (i < json.len and json[i] != '[' and json[i] != '}') i += 1;
+    if (i >= json.len or json[i] != '[') return;
+    i += 1;
+    while (i < json.len and json[i] != ']') {
+        while (i < json.len and (json[i] < '0' or json[i] > '9') and json[i] != ']') i += 1;
+        if (i >= json.len or json[i] == ']') break;
+        var v: u32 = 0;
+        while (i < json.len and json[i] >= '0' and json[i] <= '9') : (i += 1) {
+            v = v *% 10 +% (json[i] - '0');
+        }
+        if (v > 0) set.put(v, {}) catch {};
+    }
+}
+
+fn collectComposeScamins(gpa: std.mem.Allocator, out_a: std.mem.Allocator, readers: []const *pmtiles.Reader) ![]const u32 {
+    var set = std.AutoHashMap(u32, void).init(gpa);
+    defer set.deinit();
+
+    for (readers) |r| {
+        const h = r.header;
+        if (h.metadata_length == 0) continue;
+        const raw = r.bytes[@intCast(h.metadata_offset)..][0..@intCast(h.metadata_length)];
+        var owned: ?[]u8 = null;
+        defer if (owned) |o| gpa.free(o);
+        const json: []const u8 = switch (h.internal_compression) {
+            .none => raw,
+            .gzip => blk: {
+                owned = gzip.decompress(gpa, raw) catch continue;
+                break :blk owned.?;
+            },
+            else => continue,
+        };
+        scanScaminArray(json, &set);
+    }
+
+    if (set.count() == 0) return &.{};
+    const vals = try out_a.alloc(u32, set.count());
+    var i: usize = 0;
+    var it = set.keyIterator();
+    while (it.next()) |k| : (i += 1) vals[i] = k.*;
+    std.mem.sort(u32, vals, {}, std.sort.asc(u32));
+    return vals;
+}
+
 fn finishOpen(
     gpa: std.mem.Allocator,
     src: *ComposeSource,
@@ -1275,6 +1328,7 @@ fn finishOpen(
     src.readers = readers;
     src.names = names;
     src.dates = dates;
+    src.scamins = if (src.kind == .vector) try collectComposeScamins(src.gpa, a, readers) else &.{};
     src.owns_archives = owns_archives;
     src.minz = minz;
     src.maxz = maxz;

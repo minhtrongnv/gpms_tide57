@@ -168,7 +168,7 @@ fn buildWith(gpa: std.mem.Allocator, cells: []const plane.Cell, adopt: ?*plane.A
 }
 
 // ===========================================================================
-// Serialization — a precomputed partition as a self-contained sidecar (v4).
+// Serialization — a precomputed partition as a self-contained sidecar (v5).
 // ===========================================================================
 //
 // v4 makes staleness PER-FACE instead of all-or-nothing. Every face is stamped
@@ -203,11 +203,11 @@ pub const MAGIC = [4]u8{ 'T', '5', '7', 'P' };
 // otherwise outlive every fix (a field device rendered a Great Lakes cell
 // owning Gulf-of-Mexico ground from exactly such a sidecar). Bump on ANY
 // change to the owned-face computation.
-pub const FORMAT_VERSION: u32 = 4; // 4: per-face input digests + (name,date) identity — incremental adoption
+pub const FORMAT_VERSION: u32 = 5; // 5: rebuild after ECDIS viewing-scale ownership semantics; byte layout remains v4-compatible
 
 pub const LoadError = error{
     BadMagic,
-    UnsupportedVersion, // v3 and earlier: no per-face digests; rebuild fresh
+    UnsupportedVersion, // earlier ownership generations rebuild fresh
     Truncated,
     OutOfMemory,
 };
@@ -344,7 +344,7 @@ const Cursor = struct {
     }
 };
 
-/// Parse a v4 sidecar into an adoption pool: every stored face whose cell
+/// Parse a v5 sidecar into an adoption pool: every stored face whose cell
 /// resolves by (name, date, digest) lands under (current index, face digest).
 /// Unresolvable faces are skipped — their ground's owner changed, so the build
 /// recomputes them. Geometry is decoded into `pa` (an arena the caller frees

@@ -2002,6 +2002,23 @@ export fn tile57_compose_get_meta(handle: ?*compose.ComposeSource, out: ?*CCompo
     };
 }
 
+/// Distinct SCAMIN denominators present across the composed chart set
+/// (ascending). NULL/0 when none. Free *out with tile57_free.
+export fn tile57_compose_scamin(handle: ?*compose.ComposeSource, out: ?*?[*]i32, out_len: ?*usize, err: ?*CError) callconv(.c) c_int {
+    const o = out orelse return failWith(err, .badarg, bad_out);
+    const n = out_len orelse return failWith(err, .badarg, bad_out);
+    o.* = null;
+    n.* = 0;
+    const src = handle orelse return failWith(err, .badarg, "compose source must not be null");
+    const vals = src.scamin();
+    if (vals.len == 0) return OK;
+    const p = exportAlloc(vals.len * @sizeOf(i32)) orelse return failWith(err, .nomem, "out of memory");
+    @memcpy(p[0 .. vals.len * @sizeOf(u32)], std.mem.sliceAsBytes(vals));
+    o.* = @ptrCast(@alignCast(p));
+    n.* = vals.len;
+    return OK;
+}
+
 /// Charts handed to the open that embed no usable coverage. See tile57.h.
 export fn tile57_compose_skipped(handle: ?*compose.ComposeSource) callconv(.c) u32 {
     const src = handle orelse return 0;

@@ -1665,6 +1665,12 @@ tile57_status tile57_compose_query(tile57_compose *c, double lon, double lat, do
 /* Fill *out with the compositor's zoom range + union coverage bounds. */
 void tile57_compose_get_meta(tile57_compose *c, tile57_compose_meta *out);
 
+/* Distinct SCAMIN denominators present across the composed chart set,
+ * ascending. NULL/0 when none. Free *out with tile57_free. Kept as a separate
+ * call rather than growing tile57_compose_meta for ABI stability. */
+tile57_status tile57_compose_scamin(tile57_compose *c, int32_t **out, size_t *out_len,
+                                    tile57_error *err);
+
 /* Charts handed to the open that embed no usable coverage: they own no ground
  * and are absent from every composed tile, so a host reads this to tell a
  * complete quilt from one with holes in it. 0 for a NULL handle.

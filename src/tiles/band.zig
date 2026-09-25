@@ -3,8 +3,6 @@
 //! (which bakes each cell over its band's zooms) and the compositor (which reads
 //! the band to decide overscale fill-up), so neither owns the mapping.
 
-const std = @import("std");
-
 /// Native [minzoom, maxzoom] Web-Mercator span for a navigational-purpose band.
 pub const ZoomRange = struct { min: u8, max: u8 };
 
@@ -24,41 +22,6 @@ pub fn bandOf(cscl: i32) Band {
     if (n <= 500_000) return .coastal;
     if (n <= 2_300_000) return .general;
     return .overview;
-}
-
-// OpenCPN S-57 chart-selection scale: a vector chart remains normally usable
-// until the viewport denominator is about 4× the chart's native compilation scale
-// (s57chart::GetNormalScaleMax / Quilt::GetNomScaleMin with zoom modifier 0).
-//
-// The compositor can switch ownership only at INTEGER source-tile zooms, while the
-// true physical crossing is fractional. Ownership must NOT start before the real
-// crossing: doing floor(z) lets a finer chart steal the whole preceding zoom level
-// (for example a 1:20k harbour cell at z11 / ~1:90k although its 4× limit is ~1:80k),
-// after which that cell's lower SCAMIN values make soundings/ATONs disappear when
-// the user zooms IN. Use ceil(z) so the old/coarser owner remains until the first
-// tile zoom wholly inside the finer chart's admissible scale. This also lines up
-// with the discrete ECDIS viewing-scale ladder used by the client.
-pub fn openCpnAdmissionFloor(cscl: i32, lat_deg: f64) u8 {
-    const native: f64 = @floatFromInt(if (cscl > 0) cscl else 50_000);
-    const max_denom = native * 4.0;
-    // Same physical reference used by the style/SCAMIN model: Web-Mercator
-    // metres/CSS-px at z0 divided by the 0.2645 mm reference CSS-pixel pitch.
-    const k = 78_271.516964020485 * @cos(lat_deg * std.math.pi / 180.0) / 0.0002645;
-    if (!(k > 0) or !(max_denom > 0)) return 0;
-    const z = std.math.log2(k / max_denom);
-    if (z <= 0) return 0;
-    if (z >= 24) return 24;
-    return @intFromFloat(@ceil(z));
-}
-
-test "OpenCPN admission floor never promotes a finer chart before its physical crossing" {
-    // Chesapeake (~39N):
-    //   1:80k  ×4 => 1:320k, crossing z~9.49  -> first safe integer tile z10.
-    //   1:20k  ×4 =>  1:80k, crossing z~11.49 -> first safe integer tile z12.
-    // In particular the harbour chart must NOT own z11 (~1:90k viewing step),
-    // otherwise its lower-SCAMIN SOUNDG/ATONs replace still-visible coarse data.
-    try std.testing.expectEqual(@as(u8, 10), openCpnAdmissionFloor(80_000, 39.0));
-    try std.testing.expectEqual(@as(u8, 12), openCpnAdmissionFloor(20_000, 39.0));
 }
 
 /// Overscale fill-up depth DEFAULT: how many zooms past its native max a band's
@@ -93,6 +56,7 @@ pub fn bandZooms(band: Band) ZoomRange {
 }
 
 test "bandOf maps compilation scale to band" {
+    const std = @import("std");
     try std.testing.expectEqual(Band.harbor, bandOf(20_000));
     try std.testing.expectEqual(Band.approach, bandOf(50_000));
     try std.testing.expectEqual(Band.overview, bandOf(3_000_000));
@@ -100,6 +64,7 @@ test "bandOf maps compilation scale to band" {
 }
 
 test "bandZooms is finest-to-coarsest with one-zoom overlap" {
+    const std = @import("std");
     try std.testing.expectEqual(ZoomRange{ .min = 11, .max = 13 }, bandZooms(.approach));
     try std.testing.expectEqual(ZoomRange{ .min = 9, .max = 11 }, bandZooms(.coastal));
 }
