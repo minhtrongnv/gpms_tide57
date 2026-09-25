@@ -14,7 +14,6 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const s57 = @import("s57");
 const tile = @import("tiles").tile;
-const tband = @import("tiles").band;
 const mvt = @import("tiles").mvt;
 const mlt = @import("tiles").mlt;
 const render = @import("render");
@@ -2756,15 +2755,16 @@ fn appendCellFeatures(
             if (effScamin(f, opts)) |sc| {
                 if (@as(f64, @floatFromInt(sc)) < subband_min_denom) continue;
             } else if (f.objl == 75) {
-                // SCAMIN-less LIGHTS follow chart admission, not the NOAA band's
-                // hard native floor. OpenCPN can select an S-57 chart out to
-                // roughly 4x CSCL; once that chart is eligible its lights are not
-                // suppressed merely because the viewport is still below the
-                // nominal usage-band zoom. Keep them out only before the
-                // OpenCPN-style chart-admission floor so world-view fill-down
-                // does not turn fine-cell sector figures into giant clutter.
-                const admit = tband.openCpnAdmissionFloor(cell.params.cscl, (tb[1] + tb[3]) * 0.5);
-                if (z < admit) continue;
+                // LIGHTS is the one class whose SCAMIN-less features do NOT ride
+                // sub-band: producers leave SCAMIN off most fine-band lights (cell
+                // selection is the intended gate — an ECDIS at this scale would
+                // never load the cell), and a light's portrayal is all fixed
+                // display-size construction — flare, characteristic text, 20/25 mm
+                // sector legs and arcs — which reads as a continent-sized doodle
+                // on a fill-up tile. The true small-scale lights arrive from the
+                // overview/general cells, SCAMIN-carrying. Ground features
+                // (land/coast/depth) keep riding.
+                continue;
             }
         }
         var ml = mlon;
