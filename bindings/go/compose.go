@@ -31,6 +31,7 @@ type ComposeMeta struct {
 	MinZoom, MaxZoom         uint8
 	Charts                   uint32
 	West, South, East, North float64
+	Scamin                   []uint32 // distinct SCAMIN denominators across the composed set
 }
 
 // OpenComposeCharts opens a resident compositor over already-open charts,
@@ -170,7 +171,37 @@ func (c *ComposeSource) Meta() ComposeMeta {
 		South:   float64(m.south),
 		East:    float64(m.east),
 		North:   float64(m.north),
+		Scamin:  c.scaminLocked(),
 	}
+}
+
+// Scamin returns the union SCAMIN manifest of the composed chart set.
+// The returned slice is a Go copy and remains valid independently of the C buffer.
+func (c *ComposeSource) Scamin() []uint32 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.scaminLocked()
+}
+
+func (c *ComposeSource) scaminLocked() []uint32 {
+	if c.ptr == nil {
+		return nil
+	}
+	var out *C.int32_t
+	var n C.size_t
+	var cerr C.tile57_error
+	if C.tile57_compose_scamin(c.ptr, &out, &n, &cerr) != C.TILE57_OK || out == nil || n == 0 {
+		return nil
+	}
+	defer C.tile57_free(unsafe.Pointer(out))
+	vals := unsafe.Slice(out, int(n))
+	res := make([]uint32, len(vals))
+	for i, v := range vals {
+		if v > 0 {
+			res[i] = uint32(v)
+		}
+	}
+	return res
 }
 
 // Skipped returns the charts handed to the open that embed no usable coverage.
