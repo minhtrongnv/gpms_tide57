@@ -26,38 +26,65 @@ pub fn bandOf(cscl: i32) Band {
     return .overview;
 }
 
-// OpenCPN S-57 chart-selection scale: a vector chart remains normally usable
-// until the viewport denominator is about 4× the chart's native compilation scale
-// (s57chart::GetNormalScaleMax / Quilt::GetNomScaleMin with zoom modifier 0).
+// Canonical ECDIS/S-101 viewing-scale ladder used by the web client.
+// Coarse -> fine.  A chart becomes eligible on the FIRST selected viewing scale
+// whose denominator is within OpenCPN's normal vector-chart underzoom limit
+// (roughly 4 × native CSCL at zoom modifier 0).
 //
-// The compositor can switch ownership only at INTEGER source-tile zooms, while the
-// true physical crossing is fractional. Ownership must NOT start before the real
-// crossing: doing floor(z) lets a finer chart steal the whole preceding zoom level
-// (for example a 1:20k harbour cell at z11 / ~1:90k although its 4× limit is ~1:80k),
-// after which that cell's lower SCAMIN values make soundings/ATONs disappear when
-// the user zooms IN. Use ceil(z) so the old/coarser owner remains until the first
-// tile zoom wholly inside the finer chart's admissible scale. This also lines up
-// with the discrete ECDIS viewing-scale ladder used by the client.
-pub fn openCpnAdmissionFloor(cscl: i32, lat_deg: f64) u8 {
-    const native: f64 = @floatFromInt(if (cscl > 0) cscl else 50_000);
-    const max_denom = native * 4.0;
-    // Same physical reference used by the style/SCAMIN model: Web-Mercator
-    // metres/CSS-px at z0 divided by the 0.2645 mm reference CSS-pixel pitch.
-    const k = 78_271.516964020485 * @cos(lat_deg * std.math.pi / 180.0) / 0.0002645;
-    if (!(k > 0) or !(max_denom > 0)) return 0;
-    const z = std.math.log2(k / max_denom);
-    if (z <= 0) return 0;
-    if (z >= 24) return 24;
-    return @intFromFloat(@ceil(z));
+// IMPORTANT: ownership is ultimately stored on INTEGER source-tile zooms.  Using
+// floor/ceil of the raw fractional 4× crossing is wrong around a tile boundary:
+// e.g. at ~39N, CSCL 1:50k crosses 1:200k at z~10.17 (it must already serve the
+// selected 1:180k step -> source z10), while CSCL 1:20k crosses 1:80k at z~11.49
+// (it must NOT serve the selected 1:90k step; first eligible is 1:45k -> source
+// z12).  Quantize to the SAME semantic viewing-scale ladder first, then derive
+// the integer source zoom.  This makes chart ownership monotonic across the
+// exact scale stops the mariner can select.
+pub const ECDIS_DISPLAY_SCALES = [_]f64{
+    10_000_000,
+    3_500_000,
+    1_500_000,
+    700_000,
+    350_000,
+    180_000,
+    90_000,
+    45_000,
+    22_000,
+    12_000,
+    8_000,
+    4_000,
+    3_000,
+    2_000,
+    1_000,
+};
+
+fn firstEligibleDisplayScale(max_denom: f64) f64 {
+    for (ECDIS_DISPLAY_SCALES) |d| {
+        if (d <= max_denom) return d;
+    }
+    return ECDIS_DISPLAY_SCALES[ECDIS_DISPLAY_SCALES.len - 1];
 }
 
-test "OpenCPN admission floor never promotes a finer chart before its physical crossing" {
+pub fn openCpnAdmissionFloor(cscl: i32, lat_deg: f64) u8 {
+    const native: f64 = @floatFromInt(if (cscl > 0) cscl else 50_000);
+    const selected = firstEligibleDisplayScale(native * 4.0);
+
+    // Same reference physical pixel as the style/SCAMIN model.  The selected
+    // scale is a semantic stop; MapLibre requests floor(cameraZoom) source tiles.
+    const k = 78_271.516964020485 * @cos(lat_deg * std.math.pi / 180.0) / 0.0002645;
+    if (!(k > 0) or !(selected > 0)) return 0;
+    const z = std.math.log2(k / selected);
+    if (z <= 0) return 0;
+    if (z >= 24) return 24;
+    return @intFromFloat(@floor(z));
+}
+
+test "OpenCPN admission follows ECDIS viewing-scale stops" {
     // Chesapeake (~39N):
-    //   1:80k  ×4 => 1:320k, crossing z~9.49  -> first safe integer tile z10.
-    //   1:20k  ×4 =>  1:80k, crossing z~11.49 -> first safe integer tile z12.
-    // In particular the harbour chart must NOT own z11 (~1:90k viewing step),
-    // otherwise its lower-SCAMIN SOUNDG/ATONs replace still-visible coarse data.
+    //   1:80k ×4 = 1:320k -> 350k is too coarse; first eligible step 180k -> z10.
+    //   1:50k ×4 = 1:200k -> first eligible step 180k -> z10.
+    //   1:20k ×4 =  1:80k -> 90k is too coarse; first eligible step 45k  -> z12.
     try std.testing.expectEqual(@as(u8, 10), openCpnAdmissionFloor(80_000, 39.0));
+    try std.testing.expectEqual(@as(u8, 10), openCpnAdmissionFloor(50_000, 39.0));
     try std.testing.expectEqual(@as(u8, 12), openCpnAdmissionFloor(20_000, 39.0));
 }
 
